@@ -4,7 +4,12 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts"],
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "prisma/**/*.test.ts",
+      "tests/**/*.test.ts",
+    ],
     globals: false,
   },
   resolve: {

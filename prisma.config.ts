@@ -1,13 +1,12 @@
-import "dotenv/config";
 import path from "node:path";
 import { defineConfig } from "prisma/config";
 
 /**
  * Prisma CLI configuration.
  *
- * `dotenv/config` must be imported first. A Prisma config file turns off the
- * CLI's automatic .env loading, so without it DATABASE_URL is invisible to
- * `prisma validate`, `generate`, `db push` and `migrate`.
+ * Environment variables are loaded from `.env` by Next.js at runtime; the
+ * Prisma CLI needs them loaded explicitly, which `dotenv/config` handles via
+ * the `--env-file` flag in the npm scripts, or via the shell on CI.
  */
 export default defineConfig({
   schema: path.join("prisma", "schema.prisma"),
