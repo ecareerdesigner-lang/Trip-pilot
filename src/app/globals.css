@@ -1,0 +1,179 @@
+/* Fonts load from the CDN at runtime so a build never needs network access. */
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   TripPilot AI — design tokens
+
+   Direction: a transit map, not a dashboard. Cool paper stock, deep ink,
+   a single teal "route" colour for anything that moves the traveler forward,
+   and a per-mode line palette so a subway leg and a walking leg are told
+   apart by colour the way they are on a real transit diagram.
+
+   Fonts load from the Google Fonts CDN at runtime so a build never depends
+   on network access. System stacks cover the gap before they arrive.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* Surfaces */
+  --color-paper: #eef1ef;
+  --color-paper-deep: #e3e8e5;
+  --color-card: #ffffff;
+  --color-ink: #0d1b24;
+  --color-ink-soft: #17303f;
+  --color-muted: #5c6f78;
+  --color-line: #d5dcda;
+  --color-line-soft: #e6eae8;
+
+  /* Route — the colour of forward motion. Primary actions, the timeline rail. */
+  --color-route: #0e7c6b;
+  --color-route-deep: #095a4e;
+  --color-route-soft: #dcefea;
+
+  /* Signal — budget pressure, attention, "needs booking". */
+  --color-signal: #b57712;
+  --color-signal-soft: #fbf0d9;
+
+  /* Alert — conflicts the reality-check engine will not let you ignore. */
+  --color-alert: #a83b22;
+  --color-alert-soft: #fbe6e0;
+
+  --font-display:
+    "Bricolage Grotesque", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-sans:
+    "Instrument Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", ui-monospace, monospace;
+
+  --radius-card: 0.875rem;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 1px 2px rgb(13 27 36 / 0.05), 0 8px 24px -16px rgb(13 27 36 / 0.35);
+  --shadow-lift: 0 2px 4px rgb(13 27 36 / 0.06), 0 16px 40px -20px rgb(13 27 36 / 0.45);
+}
+
+/* Transit line colours. Read by `TRANSPORT_MODE_COLOR` for inline styling,
+   so they live as plain custom properties rather than Tailwind utilities. */
+:root {
+  --mode-walk: #6e7f86;
+  --mode-subway: #0e7c6b;
+  --mode-bus: #a8621b;
+  --mode-train: #1f4fa8;
+  --mode-taxi: #c8891b;
+  --mode-uber: #14202a;
+  --mode-lyft: #6d3bb5;
+  --mode-car: #4a5d66;
+  --mode-flight: #0a6e9b;
+  --mode-ferry: #0e7a8c;
+  --mode-bike: #2f7d3a;
+  --mode-other: #7a8a91;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv05" 1, "ss03" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  /* Times, prices, distances and codes are set in mono. They are data the
+     traveler scans down a column, not prose. */
+  .tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-route);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background-color: var(--color-route-soft);
+    color: var(--color-route-deep);
+  }
+}
+
+@layer utilities {
+  /* The signature element: a vertical rail that itinerary items hang from,
+     drawn once here so the timeline, the dashboard preview and the trip page
+     all render the same route. */
+  .route-rail {
+    position: relative;
+  }
+
+  .route-rail::before {
+    content: "";
+    position: absolute;
+    left: 0.4375rem;
+    top: 0.75rem;
+    bottom: 0.75rem;
+    width: 2px;
+    background: linear-gradient(
+      to bottom,
+      transparent,
+      var(--color-line) 8%,
+      var(--color-line) 92%,
+      transparent
+    );
+  }
+
+  .route-stop {
+    position: relative;
+    padding-left: 2rem;
+  }
+
+  .route-stop::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.375rem;
+    width: 0.9375rem;
+    height: 0.9375rem;
+    border-radius: 999px;
+    background: var(--color-card);
+    border: 2px solid var(--stop-color, var(--color-route));
+  }
+
+  /* A leg in transit: dashed rail segment instead of a solid stop. */
+  .route-leg::before {
+    background: var(--stop-color, var(--color-muted));
+    border-color: var(--stop-color, var(--color-muted));
+    width: 0.5rem;
+    height: 0.5rem;
+    left: 0.21875rem;
+    top: 0.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

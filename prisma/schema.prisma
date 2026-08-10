@@ -1,0 +1,686 @@
+// TripPilot AI — database schema
+//
+// Conventions used throughout this schema:
+//   * All primary keys are UUIDs (`@default(uuid())`).
+//   * All models carry `createdAt` / `updatedAt`.
+//   * Money is stored as INTEGER CENTS (fields suffixed `Cents`). Never floats.
+//     Rationale: exact arithmetic, and Prisma `Decimal` does not serialize
+//     across the React Server Component boundary without manual conversion.
+//   * Geography lives in `Location`. Models that need a place point at a
+//     `Location` row instead of duplicating name/lat/lng columns.
+//   * Provider-sourced records carry `isMock` + `providerRef` so the UI can
+//     always tell the user whether data is real or sample data.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum TripStatus {
+  DRAFT
+  PLANNING
+  READY
+  COMPLETED
+  ARCHIVED
+}
+
+enum ItineraryItemType {
+  TRAVEL
+  LODGING
+  RESTAURANT
+  ACTIVITY
+  EXCURSION
+  SIGHTSEEING
+  TRANSPORTATION
+  WALKING
+  FREE_TIME
+  OTHER
+}
+
+enum TransportMode {
+  WALK
+  SUBWAY
+  BUS
+  TRAIN
+  TAXI
+  UBER
+  LYFT
+  CAR
+  FLIGHT
+  FERRY
+  BIKE
+  OTHER
+}
+
+/// How the traveler intends to reach the destination (Step 2 of the wizard).
+enum TravelMethod {
+  FLIGHT
+  DRIVING
+  TRAIN
+  BUS
+  CRUISE
+  OTHER
+}
+
+/// What the planner should do about long-haul transportation.
+enum TransportationIntent {
+  SEARCH
+  ALREADY_BOOKED
+  RECOMMEND
+}
+
+enum ReservationStatus {
+  NOT_REQUIRED
+  NEEDED
+  PENDING
+  CONFIRMED
+  CANCELLED
+  FAILED
+}
+
+enum BudgetCategory {
+  TRANSPORTATION
+  LODGING
+  FOOD
+  ACTIVITIES
+  LOCAL_TRANSPORTATION
+  MISCELLANEOUS
+}
+
+enum Pace {
+  RELAXED
+  BALANCED
+  PACKED
+}
+
+enum FoodPreference {
+  NO_PREFERENCE
+  CASUAL
+  FINE_DINING
+  LOCAL_FAVORITES
+  BUDGET_FRIENDLY
+}
+
+enum TransportPreference {
+  WALKING_PREFERRED
+  PUBLIC_TRANSPORT_PREFERRED
+  RIDESHARE_PREFERRED
+  RENTAL_CAR_PREFERRED
+  CHEAPEST
+  FASTEST
+}
+
+/// Where an itinerary item came from. Drives the "must-do beats suggestion"
+/// priority rules in the optimizer.
+enum ItemSource {
+  MUST_DO
+  AI_SUGGESTION
+  PROVIDER
+  USER
+  SYSTEM
+}
+
+enum Priority {
+  REQUIRED
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum MustDoStatus {
+  UNSCHEDULED
+  SCHEDULED
+  COMPLETED
+  DROPPED
+}
+
+enum LocationKind {
+  ADDRESS
+  CITY
+  AIRPORT
+  TRAIN_STATION
+  BUS_STATION
+  TRANSIT_STOP
+  HOTEL
+  RESTAURANT
+  ATTRACTION
+  PORT
+  OTHER
+}
+
+enum TravelDocumentType {
+  PASSPORT
+  VISA
+  BOARDING_PASS
+  HOTEL_CONFIRMATION
+  RENTAL_AGREEMENT
+  TICKET
+  INSURANCE
+  VACCINATION
+  OTHER
+}
+
+// ---------------------------------------------------------------------------
+// USER
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  image         String?
+  homeCity      String?
+  currency      String    @default("USD")
+  timezone      String    @default("America/New_York")
+  emailVerified DateTime?
+
+  trips     Trip[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// TRIP
+// ---------------------------------------------------------------------------
+
+model Trip {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+
+  name        String
+  origin      String
+  destination String
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  travelers   Int      @default(1)
+  status      TripStatus @default(DRAFT)
+  currency    String   @default("USD")
+
+  // Budget allocations declared by the traveler, in cents.
+  // Actual/planned spend lives in the Budget ledger rows.
+  totalBudgetCents               Int?
+  transportationBudgetCents      Int?
+  lodgingBudgetCents             Int?
+  foodBudgetCents                Int?
+  activityBudgetCents            Int?
+  localTransportationBudgetCents Int?
+
+  notes String? @db.Text
+
+  // Long-haul travel intent captured in wizard step 2.
+  travelMethod         TravelMethod?
+  transportationIntent TransportationIntent @default(RECOMMEND)
+
+  // Set when a generation run finishes successfully.
+  generatedAt DateTime?
+
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preference            TripPreference?
+  days                  TripDay[]
+  itineraryItems        ItineraryItem[]
+  transportationLegs    TransportationLeg[]
+  mustDos               MustDo[]
+  budgets               Budget[]
+  reservations          Reservation[]
+  hotelOptions          HotelOption[]
+  restaurantOptions     RestaurantOption[]
+  activityOptions       ActivityOption[]
+  transportationOptions TransportationOption[]
+  documents             TravelDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, startDate])
+  @@map("trips")
+}
+
+model TripPreference {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @unique @db.Uuid
+
+  pace                 Pace                  @default(BALANCED)
+  foodPreference       FoodPreference        @default(NO_PREFERENCE)
+  transportPreferences TransportPreference[]
+
+  /// Free-form tags such as "museums", "outdoors", "nightlife".
+  interests String[]
+
+  dietaryRestrictions String[]
+  accessibilityNeeds  String?  @db.Text
+
+  /// Earliest / latest hours the traveler wants scheduled, local time.
+  dayStartMinute Int @default(480) // 08:00
+  dayEndMinute   Int @default(1320) // 22:00
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("trip_preferences")
+}
+
+model TripDay {
+  id      String   @id @default(uuid()) @db.Uuid
+  tripId  String   @db.Uuid
+  date    DateTime @db.Date
+  /// 1-based day index within the trip, used for stable ordering.
+  dayNumber Int
+  summary String?  @db.Text
+  notes   String?  @db.Text
+
+  trip           Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  itineraryItems ItineraryItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tripId, date])
+  @@unique([tripId, dayNumber])
+  @@index([tripId])
+  @@map("trip_days")
+}
+
+// ---------------------------------------------------------------------------
+// LOCATION — single source of truth for geography
+// ---------------------------------------------------------------------------
+
+model Location {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String
+  kind      LocationKind @default(ADDRESS)
+  address   String?
+  city      String?
+  region    String?
+  country   String?
+  postalCode String?
+  latitude  Float?
+  longitude Float?
+  timezone  String?
+
+  /// Stable identifier from whichever provider supplied this place
+  /// (e.g. Google Places place_id). Null for user-entered locations.
+  providerRef  String?
+  providerName String?
+  isMock       Boolean @default(false)
+
+  itineraryItems       ItineraryItem[]
+  legsFrom             TransportationLeg[]    @relation("LegOrigin")
+  legsTo               TransportationLeg[]    @relation("LegDestination")
+  hotelOptions         HotelOption[]
+  restaurantOptions    RestaurantOption[]
+  activityOptions      ActivityOption[]
+  optionOrigins        TransportationOption[] @relation("OptionOrigin")
+  optionDestinations   TransportationOption[] @relation("OptionDestination")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([providerName, providerRef])
+  @@index([city, country])
+  @@map("locations")
+}
+
+// ---------------------------------------------------------------------------
+// ITINERARY
+// ---------------------------------------------------------------------------
+
+model ItineraryItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  tripId    String  @db.Uuid
+  tripDayId String  @db.Uuid
+  locationId String? @db.Uuid
+
+  type        ItineraryItemType
+  title       String
+  description String?           @db.Text
+
+  startTime       DateTime
+  endTime         DateTime
+  durationMinutes Int
+
+  estimatedCostCents Int               @default(0)
+  actualCostCents    Int?
+  budgetCategory     BudgetCategory?
+
+  reservationRequired Boolean           @default(false)
+  reservationStatus   ReservationStatus @default(NOT_REQUIRED)
+
+  priority Priority   @default(NORMAL)
+  source   ItemSource @default(AI_SUGGESTION)
+  notes    String?    @db.Text
+
+  /// Ordering within a day when two items share a start time.
+  sortOrder Int     @default(0)
+  completed Boolean @default(false)
+  /// True when backed by sample data rather than a live provider.
+  isMock    Boolean @default(false)
+
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripDay  TripDay   @relation(fields: [tripDayId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  /// Transportation legs that deliver the traveler TO this item.
+  inboundLegs TransportationLeg[] @relation("LegToItem")
+  reservation Reservation?
+  mustDo      MustDo?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, startTime])
+  @@index([tripDayId, startTime, sortOrder])
+  @@index([tripId, type])
+  @@map("itinerary_items")
+}
+
+model TransportationLeg {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @db.Uuid
+
+  /// The itinerary item this leg delivers the traveler to, when applicable.
+  toItemId String? @db.Uuid
+
+  originLocationId      String? @db.Uuid
+  destinationLocationId String? @db.Uuid
+
+  /// Plain-text fallbacks for legs whose endpoints are not resolved places
+  /// (e.g. "curbside pickup"). Prefer the Location relations.
+  originLabel      String?
+  destinationLabel String?
+
+  mode            TransportMode
+  departureTime   DateTime?
+  arrivalTime     DateTime?
+  durationMinutes Int
+  estimatedCostCents Int        @default(0)
+  distanceMeters  Int?
+  instructions    String?       @db.Text
+  provider        String?
+
+  /// Provider route payload (polyline, steps, fare details). Opaque to the app.
+  routeData Json?
+
+  /// Position within a multi-leg journey: WALK(0) -> SUBWAY(1) -> WALK(2).
+  legOrder Int     @default(0)
+  isMock   Boolean @default(false)
+
+  trip                Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  toItem              ItineraryItem? @relation("LegToItem", fields: [toItemId], references: [id], onDelete: Cascade)
+  originLocation      Location?      @relation("LegOrigin", fields: [originLocationId], references: [id], onDelete: SetNull)
+  destinationLocation Location?      @relation("LegDestination", fields: [destinationLocationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, departureTime])
+  @@index([toItemId, legOrder])
+  @@map("transportation_legs")
+}
+
+model MustDo {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @db.Uuid
+
+  title       String
+  description String?      @db.Text
+  status      MustDoStatus @default(UNSCHEDULED)
+  priority    Priority     @default(REQUIRED)
+
+  /// Optional hard constraints the traveler supplied ("Saturday night").
+  preferredDate DateTime? @db.Date
+  preferredTime String?
+
+  /// Set once the optimizer places this must-do on the schedule.
+  itineraryItemId String? @unique @db.Uuid
+
+  trip          Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  itineraryItem ItineraryItem? @relation(fields: [itineraryItemId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, status])
+  @@map("must_dos")
+}
+
+// ---------------------------------------------------------------------------
+// BUDGET LEDGER
+// ---------------------------------------------------------------------------
+
+/// One row per trip per category. `plannedCents` is recomputed from itinerary
+/// estimates; `actualCents` is recorded spend. The allocation itself lives on
+/// Trip so there is exactly one authoritative copy of it.
+model Budget {
+  id       String         @id @default(uuid()) @db.Uuid
+  tripId   String         @db.Uuid
+  category BudgetCategory
+
+  plannedCents Int @default(0)
+  actualCents  Int @default(0)
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tripId, category])
+  @@index([tripId])
+  @@map("budgets")
+}
+
+// ---------------------------------------------------------------------------
+// RESERVATIONS & DOCUMENTS
+// ---------------------------------------------------------------------------
+
+model Reservation {
+  id              String  @id @default(uuid()) @db.Uuid
+  tripId          String  @db.Uuid
+  itineraryItemId String? @unique @db.Uuid
+
+  title             String
+  status            ReservationStatus @default(NEEDED)
+  confirmationCode  String?
+  provider          String?
+  bookingUrl        String?
+  phone             String?
+  partySize         Int?
+  reservedFor       DateTime?
+  costCents         Int?
+  cancellationPolicy String?          @db.Text
+  notes             String?           @db.Text
+
+  trip          Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  itineraryItem ItineraryItem? @relation(fields: [itineraryItemId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, status])
+  @@map("reservations")
+}
+
+model TravelDocument {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @db.Uuid
+
+  type       TravelDocumentType @default(OTHER)
+  title      String
+  fileUrl    String?
+  fileName   String?
+  mimeType   String?
+  sizeBytes  Int?
+  reference  String?
+  expiresAt  DateTime?
+  notes      String?            @db.Text
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, type])
+  @@map("travel_documents")
+}
+
+// ---------------------------------------------------------------------------
+// PROVIDER CANDIDATE DATA
+//
+// These tables cache the real (or mock) options returned by providers so the
+// AI plans from concrete candidates instead of inventing them, and so a trip
+// can be re-planned without re-querying every external API.
+// ---------------------------------------------------------------------------
+
+model HotelOption {
+  id         String  @id @default(uuid()) @db.Uuid
+  tripId     String  @db.Uuid
+  locationId String? @db.Uuid
+
+  name             String
+  description      String? @db.Text
+  starRating       Float?
+  reviewScore      Float?
+  reviewCount      Int?
+  nightlyRateCents Int?
+  totalRateCents   Int?
+  checkInTime      String?
+  checkOutTime     String?
+  amenities        String[]
+  imageUrl         String?
+  bookingUrl       String?
+  distanceToCenterMeters Int?
+
+  providerName String
+  providerRef  String?
+  isMock       Boolean @default(false)
+  selected     Boolean @default(false)
+
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, selected])
+  @@map("hotel_options")
+}
+
+model RestaurantOption {
+  id         String  @id @default(uuid()) @db.Uuid
+  tripId     String  @db.Uuid
+  locationId String? @db.Uuid
+
+  name            String
+  description     String? @db.Text
+  cuisines        String[]
+  /// 1-4, matching the common $ .. $$$$ convention.
+  priceLevel      Int?
+  averageMealCents Int?
+  reviewScore     Float?
+  reviewCount     Int?
+  /// Opening hours as provider-supplied structured data.
+  openingHours    Json?
+  reservationRequired Boolean @default(false)
+  imageUrl        String?
+  bookingUrl      String?
+  phone           String?
+
+  providerName String
+  providerRef  String?
+  isMock       Boolean @default(false)
+
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+  @@map("restaurant_options")
+}
+
+model ActivityOption {
+  id         String  @id @default(uuid()) @db.Uuid
+  tripId     String  @db.Uuid
+  locationId String? @db.Uuid
+
+  name             String
+  description      String?  @db.Text
+  category         String?
+  durationMinutes  Int?
+  priceCents       Int?
+  reviewScore      Float?
+  reviewCount      Int?
+  openingHours     Json?
+  bookingRequired  Boolean  @default(false)
+  imageUrl         String?
+  bookingUrl       String?
+  tags             String[]
+
+  providerName String
+  providerRef  String?
+  isMock       Boolean @default(false)
+
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+  @@map("activity_options")
+}
+
+/// Long-haul travel candidates (flights, trains, buses, drives) for getting to
+/// and from the destination. Distinct from TransportationLeg, which is a leg
+/// that has actually been placed on the itinerary.
+model TransportationOption {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @db.Uuid
+
+  originLocationId      String? @db.Uuid
+  destinationLocationId String? @db.Uuid
+
+  mode            TransportMode
+  carrier         String?
+  identifier      String?
+  departureTime   DateTime?
+  arrivalTime     DateTime?
+  durationMinutes Int?
+  priceCents      Int?
+  stops           Int?
+  /// Full provider payload: segments, fare rules, baggage, etc.
+  segments        Json?
+  bookingUrl      String?
+  /// True for the return journey rather than the outbound.
+  isReturn        Boolean @default(false)
+  selected        Boolean @default(false)
+
+  providerName String
+  providerRef  String?
+  isMock       Boolean @default(false)
+
+  trip                Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  originLocation      Location? @relation("OptionOrigin", fields: [originLocationId], references: [id], onDelete: SetNull)
+  destinationLocation Location? @relation("OptionDestination", fields: [destinationLocationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId, isReturn, selected])
+  @@map("transportation_options")
+}
