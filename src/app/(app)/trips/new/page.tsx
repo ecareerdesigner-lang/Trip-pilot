@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
-import { NotBuiltYet } from "@/components/ui/not-built-yet";
+import { TripWizard } from "@/components/trips/wizard/trip-wizard";
 
 export const metadata: Metadata = { title: "Plan a new trip" };
 
@@ -10,13 +10,9 @@ export default function NewTripPage() {
       <PageHeader
         eyebrow="New trip"
         title="Plan a new trip"
-        description="Seven steps: where you are going, how you are getting there, what you have to spend, how you like to travel, what you refuse to miss, anything else, then build."
+        description="Seven steps. Only the first two need answers — everything else has a sensible default."
       />
-      <NotBuiltYet
-        feature="The trip wizard"
-        phase="Phase 11"
-        detail="Destination, transportation, budget, preferences, must-dos, notes, and the build screen."
-      />
+      <TripWizard />
     </>
   );
 }

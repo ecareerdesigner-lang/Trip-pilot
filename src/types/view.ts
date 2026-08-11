@@ -1,5 +1,8 @@
 import type {
+  ItemSource,
   ItineraryItemType,
+  Priority,
+  ReservationStatus,
   TransportMode,
   TripStatus,
 } from "@/types/domain";
@@ -65,4 +68,82 @@ export interface DashboardData {
   };
   /** Where the numbers on screen came from. Surfaced to the user verbatim. */
   source: "database" | "sample";
+}
+
+/** One transportation leg as the timeline renders it. */
+/** One leg of a journey, as rendered on the timeline. */
+export interface TimelineLeg {
+  id: string;
+  mode: TransportMode;
+  durationMinutes: number;
+  distanceMeters: number | null;
+  costCents: number;
+  instructions: string;
+  originLabel: string | null;
+  destinationLabel: string | null;
+  /** ISO datetimes. Null when the leg has not been scheduled to the minute. */
+  departureTime: string | null;
+  arrivalTime: string | null;
+  legOrder: number;
+}
+
+export interface TimelineItem {
+  id: string;
+  type: ItineraryItemType;
+  title: string;
+  description: string | null;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  locationName: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  estimatedCostCents: number;
+  reservationRequired: boolean;
+  reservationStatus: ReservationStatus;
+  priority: Priority;
+  source: ItemSource;
+  /** Convenience for the UI: this item exists because the traveler required it. */
+  isMustDo: boolean;
+  completed: boolean;
+  isMock: boolean;
+  /** Legs that deliver the traveler to this item, in order. */
+  legs: TimelineLeg[];
+}
+
+export interface DayTotals {
+  itemCount: number;
+  /** Everything on the day, including the fares to move between things. */
+  plannedCents: number;
+  /** Minutes spent somewhere, as opposed to getting somewhere. */
+  scheduledMinutes: number;
+  travelMinutes: number;
+  walkingMeters: number;
+  /** Unclaimed minutes between the first and last commitment. Never negative. */
+  openMinutes: number;
+}
+
+export interface ItineraryDay {
+  id: string;
+  dayNumber: number;
+  /** ISO calendar date. */
+  date: string;
+  summary: string | null;
+  items: TimelineItem[];
+  totals: DayTotals;
+  /** ISO datetimes of the first departure and the last thing ending. */
+  startsAt: string | null;
+  endsAt: string | null;
+}
+
+export interface TripItinerary {
+  tripId: string;
+  tripName: string;
+  destination: string;
+  currency: string;
+  days: ItineraryDay[];
+  /** False when the trip exists but has never been generated. */
+  hasAnyItems: boolean;
+  /** Drives the sample-data label. Never hide where the numbers came from. */
+  containsMockData: boolean;
 }

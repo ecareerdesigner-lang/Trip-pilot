@@ -18,7 +18,9 @@ sessions in Phase 22.
 
 ## Build phase
 
-Phase 1 (foundation) and Phase 2 (docs + seed) are complete. See
+Phases 1-2 (foundation, docs, seed), 11 (trip wizard), 12 (trip CRUD), 13
+(mock providers), 14 (AI planner), 15 (itinerary view), 16 (transportation),
+17 (budget) and 18 (reality check) are complete. See
 `docs/development.md` for the full 27-phase order and what remains.
 
 Do not jump ahead. Each phase ends with typecheck, lint, tests and — where it
@@ -156,6 +158,90 @@ Do not rediscover these.
   produces `"2026 (day: 9)"`. `formatDateRange` builds that half manually.
 - **`noUncheckedIndexedAccess` is on.** Array access yields `T | undefined`.
   Handle it; do not reach for `!`.
+- **The wizard does not use `zodResolver`.** The schema carries cross-field
+  rules that only validate against the whole form, but each step must be
+  checkable alone. `TripWizard.validateStep` parses everything and surfaces
+  only the issues owned by the current step. Do not "simplify" this into a
+  resolver without solving that.
+- **`STEP_FIELDS` must list every form field exactly once.** A field missing
+  from it is never validated. A test enforces this.
+- **Absent data means a check is skipped, never that it passed.** Opening
+  hours are not stored on itinerary items, so `validateItinerary` only runs
+  the closing-time checks for items whose hours the caller supplies. Never
+  make a check quietly succeed because its input was missing.
+- **Decisions inside Prisma queries cannot be tested here.** The rule for
+  what survives a regeneration lived in a `deleteMany` filter and was wrong
+  for three releases: `MUST_DO` was preserved, so every rebuild stacked
+  another copy of the same place on the same day. It now lives in
+  `travel/rebuild-policy.ts` as pure functions with exhaustive tests, and the
+  query imports from it. Put any similar rule in a pure module first.
+- **A bug that needs two runs to appear will not show in one run.** The
+  duplicate stacking only existed after regenerating an already-generated
+  trip. Single-pass tests cannot see it. When a fix touches persistence, ask
+  what the second invocation does.
+- **The planner's buffer comes from `PACE_BUFFER_MINUTES`.** It used a flat
+  ten minutes while the validator judged against twenty-five, so the planner
+  generated warnings about its own output. `christmas.test.ts` asserts no
+  self-inflicted TIGHT_CONNECTION or OVERLAP.
+- **Reproduce with a real trip before fixing.** Three defects survived 362
+  passing tests because `pipeline.test.ts` ran a trip with no must-dos and no
+  supply pressure. `christmas.test.ts` pins the exact trip that broke twice —
+  five days, NYC, must-dos that match nothing. Add a case there when a real
+  run finds something, and watch it fail before writing the fix.
+- **A finite queue must not be consumed by near-misses.** `takeFitting` scans
+  the pending list and removes only what it schedules. An earlier version
+  advanced an index whenever a candidate did not fit, discarding it forever,
+  so days one and two drained the queue and days three to five had nothing
+  but meals.
+- **The planner must ask the router, never assume a gap.** An earlier version
+  spaced items by a flat 35 minutes; the router said 37, and the reality-check
+  engine condemned schedules the planner had just produced. Every place that
+  decides when the next item starts calls `hopMinutes`. `pipeline.test.ts`
+  asserts a generated itinerary passes its own validator — if you add a new
+  scheduling path, it must go through `hopMinutes` or that test will fail.
+- **Check the tree before building a phase.** Some phases already exist on
+  disk from earlier sessions, with their own tests and naming. Run
+  `npm run check` and grep for the engine first; building a parallel copy
+  creates two versions of the same concept (this happened with journeys.ts
+  and transportation.ts — the duplicate was deleted).
+- **Planned spend is derived, never stored on its own.** `getTripBudget`
+  recomputes the ledger from the schedule with `ledgerFromDays` on every read.
+  Only `actualCents` is carried from the database. Do not add a second place
+  that writes planned totals — it will drift.
+- **View model names are `Timeline*` / `ItineraryDay`.** An older `*View`
+  naming was consolidated away. If both appear, one is stale — do not
+  reintroduce the second set.
+- **The planner selects; it never supplies facts.** The model returns
+  candidate ids. `plan-builder.ts` re-reads the name, price, coordinates and
+  opening hours from the candidate, so a renamed museum or an invented fare
+  cannot reach the itinerary. An unknown id is dropped and reported. Do not
+  "trust" a field the model returned just because it looks right.
+- **A stay is charged once.** Check-in, check-out and evening returns are all
+  LODGING items on the same hotel. `chargedStays` in the plan builder exists
+  because billing each of them multiplied the largest budget line by the
+  length of the trip.
+- **Pure engines must not import `@/lib/env`.** It imports `server-only`,
+  which throws under Vitest. That is why `planRoute` lives in
+  `travel/routing.ts` and `providers/transit.ts` is only a thin wrapper. If a
+  test fails with "cannot be imported from a Client Component module", the
+  layering is wrong — move the pure part out rather than reaching for the
+  stub. `server-only` is aliased in `vitest.config.mts` for modules that
+  genuinely need config, such as the providers.
+- **Travel times are never constants.** Every duration is a distance from
+  `lib/geo.ts` divided by a speed in `travel/routing.ts`. Do not add a lookup
+  table of journey times; move a coordinate instead.
+- **`loading.tsx` breaks `notFound()` status codes.** A loading file wraps
+  its own segment and everything beneath it in Suspense, which streams the
+  response — so the 200 is already sent by the time a page calls
+  `notFound()`, and the 404 never lands. Never put `loading.tsx` on a segment
+  with dynamic children. Wrap the slow part in `<Suspense>` inside the page
+  instead. This cost a real debugging session; verify status codes with curl,
+  not by looking at the rendered page, because the correct not-found page
+  renders either way.
+- **Zod needs explicit messages for missing fields.** `z.string().min(2, {...})`
+  only covers a present-but-short value. A field that is absent entirely
+  produces "expected string, received undefined" unless
+  `z.string({ message })` is given too.
 - **The generated Prisma client is required for model types.** Before
   `npm run db:generate`, `PrismaClient` resolves but `prisma.trip` does not
   exist. `getPrisma()` returns `null` rather than throwing.
