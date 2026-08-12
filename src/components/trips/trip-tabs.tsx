@@ -11,7 +11,7 @@ import { cn } from "@/lib/cn";
 const TABS = [
   { label: "Overview", path: "" },
   { label: "Itinerary", path: "/itinerary" },
-  { label: "Map", path: null },
+  { label: "Map", path: "/map" },
   { label: "Budget", path: "/budget" },
   { label: "Transportation", path: "/transportation" },
   { label: "Reservations", path: null },

@@ -19,6 +19,7 @@ import {
 import { formatDayDate, formatDistance, formatDuration, formatTime } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
+import { ItemControls } from "@/components/trips/item-controls";
 import type { ItineraryDay, TimelineItem, TimelineLeg } from "@/types/view";
 
 /**
@@ -57,10 +58,20 @@ function LegRow({ leg, currency }: { leg: TimelineLeg; currency: string }) {
 function ItemRow({
   item,
   currency,
+  tripId,
+  dayId,
 }: {
   item: TimelineItem;
   currency: string;
+  /** Absent when the timeline is read-only, e.g. the sample dashboard. */
+  tripId?: string;
+  dayId?: string;
 }) {
+  const startMinute = (() => {
+    const date = new Date(item.startTime);
+    return date.getUTCHours() * 60 + date.getUTCMinutes();
+  })();
+
   return (
     <>
       {item.legs.map((leg) => (
@@ -119,6 +130,18 @@ function ItemRow({
             </p>
           </div>
         </div>
+
+        {tripId && dayId ? (
+          <ItemControls
+            tripId={tripId}
+            dayId={dayId}
+            itemId={item.id}
+            title={item.title}
+            startMinute={startMinute}
+            durationMinutes={item.durationMinutes}
+            completed={item.completed}
+          />
+        ) : null}
       </li>
     </>
   );
@@ -162,9 +185,14 @@ function DayTotals({ day, currency }: { day: ItineraryDay; currency: string }) {
 export function ItineraryTimeline({
   days,
   currency,
+  tripId,
+  editable = false,
 }: {
   days: ItineraryDay[];
   currency: string;
+  tripId?: string;
+  /** Sample data has no rows to edit, so controls stay off unless asked for. */
+  editable?: boolean;
 }) {
   // Open on the first day that has anything on it.
   const firstWithItems = Math.max(
@@ -224,7 +252,14 @@ export function ItineraryTimeline({
             <DayTotals day={day} currency={currency} />
             <ol className="route-rail px-5 py-4">
               {day.items.map((item) => (
-                <ItemRow key={item.id} item={item} currency={currency} />
+                <ItemRow
+                  key={item.id}
+                  item={item}
+                  currency={currency}
+                  {...(editable && tripId
+                    ? { tripId, dayId: days[selected]!.id }
+                    : {})}
+                />
               ))}
             </ol>
           </>

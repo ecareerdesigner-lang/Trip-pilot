@@ -169,6 +169,73 @@ Do not rediscover these.
   hours are not stored on itinerary items, so `validateItinerary` only runs
   the closing-time checks for items whose hours the caller supplies. Never
   make a check quietly succeed because its input was missing.
+- **Edits are pure; persistence is a wrapper.** Every mutation lives in
+  `travel/edit-itinerary.ts` as a function from a day to a new day, with 30
+  tests. `editDay` in the repository only reads, delegates and writes. Add new
+  edit operations there, not in the repository.
+- **Every edit reroutes.** Moving, resizing or removing an item recomputes the
+  journeys into the items around it, using the same backwards-from-arrival
+  rule as the plan builder. An edit path that skips `recomputeLegs` will
+  produce exactly the impossible schedules Phase 19 spent three rounds fixing.
+- **The local-owner fallback applies only with no database.** `getCurrentUser`
+  returns `LOCAL_OWNER` when `getPrisma()` is null and never otherwise — a
+  second `return LOCAL_OWNER` would let anyone reach a real user's trips by
+  not signing in. `auth/guard.test.ts` asserts there is exactly one.
+- **Sign-in must not reveal which emails are registered.** One message for a
+  wrong password and a missing account, and a hash is computed even when the
+  account does not exist so the response time does not answer the question.
+- **Passwords use Node's scrypt, no third-party dependency.** Hashes are
+  self-describing (`scrypt$N$r$p$salt$hash`) so cost can be raised later
+  without invalidating existing passwords.
+- **Data-driven paint needs `to-color`.** `["get", "color"]` yields a string;
+  MapLibre cannot use it as paint and silently falls back to black. Wrap it:
+  `["to-color", ["get", "color"]]`. There is no console warning for this.
+- **`mock/audit.test.ts` bounds generated coordinates tightly.** The older
+  provider test allowed a 35km radius from the city centre, which is wide
+  enough to put a Manhattan restaurant in Jersey City. The audit asserts each
+  place sits within scatter range of its own neighbourhood, that NYC places
+  fall inside a five-borough box, and that no two collide on a map.
+- **MapLibre is pinned to 5.x on purpose.** Version 6 loads its worker as a
+  separate `.mjs` module; Turbopack emits it under `/static/media/`, the
+  request 404s, and the dev server returns HTML — which the browser rejects
+  with "non-JavaScript MIME type". Markers rendered, layers never did. Version
+  5 inlines the worker as a blob. Do not upgrade without checking that
+  `find .next/static -name "*maplibre*"` returns nothing.
+- **"Failed to load module script … text/html" means a chunk 404'd**, not a
+  styling bug. Check the Network tab before touching map layer config.
+- **Memoize anything an effect depends on.** `buildMapData` ran unmemoized,
+  so every render produced fresh arrays, the map effects re-fired
+  continuously, and the route layers were added and torn down faster than
+  they could draw — markers appeared, lines never did. Sources and layers are
+  now created once inside `on("load")`; effects only call `setData`.
+- **Do not pad twice.** `map-data.ts` already pads its bounding box.
+  `fitBounds` adding a generous second margin zoomed a Manhattan trip out far
+  enough to include Secaucus.
+- **The map uses MapLibre with OpenStreetMap raster tiles — no key needed.**
+  `trip-map-libre.tsx` is client-only (`next/dynamic`, MapLibre touches
+  `window` on import). MapLibre 6 has named exports and no default. Swapping
+  to Mapbox vector tiles is a change to `TILE_STYLE` alone.
+- **`trip-map.tsx` is the keyless SVG fallback**, kept because it renders
+  without tiles at all. It is not currently mounted; the real basemap replaced
+  it after a review found stops on a blank grid unreadable.
+- **The map layer has no mapping vendor.** `travel/map-data.ts` produces markers,
+  routes and a Mercator projection in plain coordinates; `trip-map.tsx` draws
+  them as SVG. It works with no API key. A basemap can be layered behind it
+  later without either file learning what Mapbox is.
+- **Trust upstream error messages.** The client used to append "this usually
+  means ANTHROPIC_MODEL needs setting" to every 400 — including one that
+  plainly said the account was out of credit. When an API explains itself,
+  pass that through rather than guessing over it.
+- **Chat proposes; the traveler approves.** The model returns commands from a
+  fixed vocabulary, never an itinerary. `POST .../chat` without `commands`
+  proposes and touches nothing; with `commands` it applies what was approved.
+  Do not collapse these into one call — a misread request should cost a click,
+  not somebody's Thursday.
+- **Chat commands run through the same edit helpers as the UI.**
+  `applyChatCommands` calls `addItineraryItem` / `updateItineraryItem` /
+  `removeItineraryItem`, so transportation and conflicts recalculate
+  identically whichever way a change was made. Never write item rows directly
+  from the chat path.
 - **Decisions inside Prisma queries cannot be tested here.** The rule for
   what survives a regeneration lived in a `deleteMany` filter and was wrong
   for three releases: `MUST_DO` was preserved, so every rebuild stacked

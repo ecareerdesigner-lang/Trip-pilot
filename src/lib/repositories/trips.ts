@@ -1,5 +1,6 @@
 import "server-only";
 import { getPrisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { databaseUnavailable, notFound } from "@/lib/errors";
 import { sampleDashboardData, sampleTrips } from "@/lib/sample-trips";
 import {
@@ -25,6 +26,21 @@ import {
   type TransportationReport,
 } from "@/lib/travel/transportation";
 import { REPLACED_ON_REBUILD } from "@/lib/travel/rebuild-policy";
+import type { ChatCommand } from "@/lib/ai/chat-commands";
+import {
+  addItem,
+  moveItem,
+  removeItem,
+  resizeItem,
+  setCompleted,
+  shiftFrom,
+  type EditContext,
+  type EditResult,
+} from "@/lib/travel/edit-itinerary";
+import type {
+  NewItemPayload,
+  UpdateItemPayload,
+} from "@/lib/validation/itinerary-item";
 import type { OptimizeResult } from "@/lib/travel/optimize-itinerary";
 import type { BuiltPlan } from "@/lib/travel/plan-builder";
 import type { TripPayload } from "@/lib/validation/trip";
@@ -664,4 +680,387 @@ export async function applyOptimization(
   }
 
   return { movedCount };
+}
+
+/**
+ * Load one day, apply a pure edit, write the result back.
+ *
+ * The wrapper is deliberately thin. Every decision — what moves, what gets
+ * rerouted, what a journey costs — lives in `travel/edit-itinerary.ts`, where
+ * it is unit tested. This function only reads, delegates, and persists.
+ */
+async function editDay(
+  userId: string,
+  tripId: string,
+  tripDayId: string,
+  apply: (day: ItineraryDay, context: EditContext) => EditResult,
+): Promise<ItineraryDay> {
+  const prisma = getPrisma();
+  if (!prisma) throw databaseUnavailable();
+
+  const trip = await prisma.trip.findFirst({
+    where: { id: tripId, userId },
+    include: { preference: true },
+  });
+  if (!trip) throw notFound("That trip does not exist.");
+
+  const row = await prisma.tripDay.findFirst({
+    where: { id: tripDayId, tripId },
+    include: {
+      itineraryItems: {
+        orderBy: [{ startTime: "asc" }, { sortOrder: "asc" }],
+        include: {
+          location: { select: { name: true, latitude: true, longitude: true } },
+          inboundLegs: {
+            orderBy: { legOrder: "asc" },
+            include: {
+              originLocation: { select: { name: true } },
+              destinationLocation: { select: { name: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!row) throw notFound("That day does not exist.");
+
+  const before = toItineraryDay(row);
+  const { day: after } = apply(before, {
+    destination: trip.destination,
+    travelers: trip.travelers,
+    preferences: trip.preference?.transportPreferences ?? [],
+  });
+
+  const survivingIds = new Set(after.items.map((item) => item.id));
+
+  // Anything the edit dropped goes, along with its journeys.
+  await prisma.itineraryItem.deleteMany({
+    where: { tripDayId, id: { notIn: [...survivingIds] } },
+  });
+
+  for (const [index, item] of after.items.entries()) {
+    const existing = before.items.find((entry) => entry.id === item.id);
+
+    if (existing) {
+      await prisma.itineraryItem.update({
+        where: { id: item.id },
+        data: {
+          title: item.title,
+          description: item.description,
+          startTime: new Date(item.startTime),
+          endTime: new Date(item.endTime),
+          durationMinutes: item.durationMinutes,
+          completed: item.completed,
+          sortOrder: index,
+        },
+      });
+    } else {
+      // New, and therefore the traveler's own. `USER` is what keeps it from
+      // being cleared the next time the trip is regenerated.
+      await prisma.itineraryItem.create({
+        data: {
+          id: item.id,
+          tripId,
+          tripDayId,
+          type: item.type,
+          title: item.title,
+          description: item.description,
+          startTime: new Date(item.startTime),
+          endTime: new Date(item.endTime),
+          durationMinutes: item.durationMinutes,
+          estimatedCostCents: item.estimatedCostCents,
+          budgetCategory: budgetCategoryFor(item.type),
+          reservationRequired: item.reservationRequired,
+          reservationStatus: item.reservationStatus,
+          priority: item.priority,
+          source: "USER",
+          sortOrder: index,
+          isMock: false,
+        },
+      });
+    }
+
+    // Legs are replaced wholesale: they are derived from the schedule, and
+    // reconciling them one by one would be more code and more ways to drift.
+    await prisma.transportationLeg.deleteMany({ where: { toItemId: item.id } });
+
+    for (const leg of item.legs) {
+      await prisma.transportationLeg.create({
+        data: {
+          tripId,
+          toItemId: item.id,
+          originLabel: leg.originLabel,
+          destinationLabel: leg.destinationLabel,
+          mode: leg.mode,
+          departureTime: leg.departureTime ? new Date(leg.departureTime) : null,
+          arrivalTime: leg.arrivalTime ? new Date(leg.arrivalTime) : null,
+          durationMinutes: leg.durationMinutes,
+          estimatedCostCents: leg.costCents,
+          distanceMeters: leg.distanceMeters,
+          instructions: leg.instructions,
+          legOrder: leg.legOrder,
+          isMock: false,
+        },
+      });
+    }
+  }
+
+  return after;
+}
+
+function budgetCategoryFor(type: ItineraryDay["items"][number]["type"]) {
+  switch (type) {
+    case "TRAVEL":
+      return "TRANSPORTATION" as const;
+    case "LODGING":
+      return "LODGING" as const;
+    case "RESTAURANT":
+      return "FOOD" as const;
+    case "ACTIVITY":
+    case "EXCURSION":
+    case "SIGHTSEEING":
+      return "ACTIVITIES" as const;
+    case "TRANSPORTATION":
+    case "WALKING":
+      return "LOCAL_TRANSPORTATION" as const;
+    default:
+      return "MISCELLANEOUS" as const;
+  }
+}
+
+export async function addItineraryItem(
+  userId: string,
+  tripId: string,
+  payload: NewItemPayload,
+): Promise<ItineraryDay> {
+  const id = globalThis.crypto.randomUUID();
+  return editDay(userId, tripId, payload.tripDayId, (day, context) =>
+    addItem(
+      day,
+      {
+        type: payload.type,
+        title: payload.title,
+        description: payload.description,
+        startMinute: payload.startMinute,
+        durationMinutes: payload.durationMinutes,
+        ...(payload.locationName ? { locationName: payload.locationName } : {}),
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        estimatedCostCents: payload.estimatedCostCents,
+        reservationRequired: payload.reservationRequired,
+      },
+      context,
+      id,
+    ),
+  );
+}
+
+export async function updateItineraryItem(
+  userId: string,
+  tripId: string,
+  tripDayId: string,
+  itemId: string,
+  payload: UpdateItemPayload,
+): Promise<ItineraryDay> {
+  return editDay(userId, tripId, tripDayId, (day, context) => {
+    let result: EditResult = { day, recomputedItemIds: [] };
+
+    if (payload.completed !== undefined) {
+      result = setCompleted(result.day, itemId, payload.completed);
+    }
+    if (payload.durationMinutes !== undefined) {
+      result = resizeItem(result.day, itemId, payload.durationMinutes, context);
+    }
+    if (payload.startMinute !== undefined) {
+      result = moveItem(result.day, itemId, payload.startMinute, context);
+    }
+    if (payload.shiftFollowingBy !== undefined) {
+      result = shiftFrom(result.day, itemId, payload.shiftFollowingBy, context);
+    }
+
+    if (payload.title !== undefined || payload.description !== undefined) {
+      const items = result.day.items.map((entry) =>
+        entry.id === itemId
+          ? {
+              ...entry,
+              title: payload.title ?? entry.title,
+              description: payload.description ?? entry.description,
+            }
+          : entry,
+      );
+      result = { day: { ...result.day, items }, recomputedItemIds: [] };
+    }
+
+    return result;
+  });
+}
+
+export async function removeItineraryItem(
+  userId: string,
+  tripId: string,
+  tripDayId: string,
+  itemId: string,
+): Promise<ItineraryDay> {
+  return editDay(userId, tripId, tripDayId, (day, context) =>
+    removeItem(day, itemId, context),
+  );
+}
+
+/**
+ * Candidate options stored for a trip, for the assistant to choose from.
+ *
+ * The assistant may only add places the providers actually returned. Without
+ * this it would invent restaurants, which is the failure mode the whole
+ * candidate architecture exists to prevent.
+ */
+export async function listTripOptions(
+  userId: string,
+  tripId: string,
+): Promise<{ id: string; name: string; kind: string; costCents: number }[]> {
+  const prisma = getPrisma();
+  if (!prisma) return [];
+
+  const trip = await prisma.trip.findFirst({
+    where: { id: tripId, userId },
+    select: { id: true },
+  });
+  if (!trip) return [];
+
+  const [restaurants, activities] = await Promise.all([
+    prisma.restaurantOption.findMany({
+      where: { tripId },
+      select: { id: true, name: true, averageMealCents: true },
+      take: 20,
+    }),
+    prisma.activityOption.findMany({
+      where: { tripId },
+      select: { id: true, name: true, priceCents: true, category: true },
+      take: 20,
+    }),
+  ]);
+
+  return [
+    ...restaurants.map(
+      (row: { id: string; name: string; averageMealCents: number | null }) => ({
+        id: row.id,
+        name: row.name,
+        kind: "restaurant",
+        costCents: row.averageMealCents ?? 0,
+      }),
+    ),
+    ...activities.map(
+      (row: {
+        id: string;
+        name: string;
+        priceCents: number | null;
+        category: string | null;
+      }) => ({
+        id: row.id,
+        name: row.name,
+        kind: row.category ?? "activity",
+        costCents: row.priceCents ?? 0,
+      }),
+    ),
+  ];
+}
+
+/**
+ * Apply commands the traveler approved.
+ *
+ * Routed through the same per-item helpers the UI controls use, so a change
+ * made by chat recalculates transportation and conflicts exactly as one made
+ * by hand does. Nothing here writes rows directly.
+ */
+export async function applyChatCommands(
+  userId: string,
+  tripId: string,
+  commands: ChatCommand[],
+): Promise<{ appliedCount: number; failed: string[] }> {
+  const prisma = getPrisma();
+  if (!prisma) throw databaseUnavailable();
+
+  const dayRows: { id: string; date: Date }[] = await prisma.tripDay.findMany({
+    where: { tripId, trip: { userId } },
+    select: { id: true, date: true },
+  });
+  if (dayRows.length === 0) throw notFound("That trip does not exist.");
+
+  const dayIdByDate = new Map(
+    dayRows.map((row) => [row.date.toISOString().slice(0, 10), row.id]),
+  );
+
+  const itemRows: { id: string; tripDayId: string }[] =
+    await prisma.itineraryItem.findMany({
+      where: { tripId },
+      select: { id: true, tripDayId: true },
+    });
+  const dayIdByItem = new Map(itemRows.map((row) => [row.id, row.tripDayId]));
+
+  let appliedCount = 0;
+  const failed: string[] = [];
+
+  for (const command of commands) {
+    try {
+      if (command.kind === "add") {
+        const tripDayId = dayIdByDate.get(command.date);
+        if (!tripDayId) {
+          failed.push(`${command.title} could not be added.`);
+          continue;
+        }
+        await addItineraryItem(userId, tripId, {
+          tripDayId,
+          type: command.type,
+          title: command.title,
+          description: command.description,
+          startMinute: command.startMinute,
+          durationMinutes: command.durationMinutes,
+          estimatedCostCents: command.estimatedCostCents,
+          reservationRequired: false,
+          latitude: null,
+          longitude: null,
+        });
+        appliedCount += 1;
+        continue;
+      }
+
+      const tripDayId = dayIdByItem.get(command.itemId);
+      if (!tripDayId) {
+        failed.push("An item could not be found.");
+        continue;
+      }
+
+      if (command.kind === "remove") {
+        await removeItineraryItem(userId, tripId, tripDayId, command.itemId);
+      } else if (command.kind === "resize") {
+        await updateItineraryItem(userId, tripId, tripDayId, command.itemId, {
+          durationMinutes: command.durationMinutes,
+        });
+      } else {
+        // Moving across days is not something the per-item helpers do, so it
+        // is reported rather than half-applied.
+        const targetDayId = dayIdByDate.get(command.toDate);
+        if (targetDayId !== tripDayId) {
+          failed.push(
+            "Moving an item to a different day is not supported yet.",
+          );
+          continue;
+        }
+        if (command.toStartMinute !== null) {
+          await updateItineraryItem(userId, tripId, tripDayId, command.itemId, {
+            startMinute: command.toStartMinute,
+          });
+        }
+      }
+
+      appliedCount += 1;
+    } catch (error) {
+      logger.warn("A chat command could not be applied", {
+        kind: command.kind,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      failed.push("One change could not be applied.");
+    }
+  }
+
+  return { appliedCount, failed };
 }

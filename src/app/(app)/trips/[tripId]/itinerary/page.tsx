@@ -15,6 +15,8 @@ import { TripTabs } from "@/components/trips/trip-tabs";
 import { GenerateButton } from "@/components/trips/generate-button";
 import { ItineraryTimeline } from "@/components/trips/itinerary-timeline";
 import { ValidationPanel } from "@/components/trips/validation-panel";
+import { TripChat } from "@/components/trips/trip-chat";
+import { isAiConfigured } from "@/lib/env";
 import { formatDateRange } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Itinerary" };
@@ -68,7 +70,27 @@ export default async function ItineraryPage({
             <ItineraryTimeline
               days={itinerary.days}
               currency={itinerary.currency}
+              tripId={tripId}
+              // `isMock` describes where the prices came from, not whether the
+              // row exists. A generated itinerary is real rows either way, so
+              // editing is offered whenever there is something to edit.
+              editable={itinerary.hasAnyItems}
             />
+
+            {/*
+              The assistant sits below the schedule it talks about, so a
+              proposal can be read against the day it changes.
+            */}
+            {isAiConfigured() ? (
+              <div className="mt-8">
+                <TripChat tripId={tripId} />
+              </div>
+            ) : (
+              <p className="mt-8 text-xs text-muted">
+                Set <code>ANTHROPIC_API_KEY</code> to ask questions about this
+                trip and make changes in plain language.
+              </p>
+            )}
           </>
         ) : (
           <Card>

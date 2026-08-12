@@ -2,12 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Compass } from "lucide-react";
+import { Compass, LogOut } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { buttonStyles } from "@/components/ui/button";
 import { PRIMARY_NAV, NEW_TRIP_LINK, isActive } from "@/components/layout/nav-links";
+import { signOutAction } from "@/app/(auth)/actions";
 
-export function Sidebar() {
+export function Sidebar({
+  userName,
+  userEmail,
+}: {
+  userName?: string;
+  userEmail?: string;
+}) {
   const pathname = usePathname();
 
   return (
@@ -55,6 +62,24 @@ export function Sidebar() {
           <NEW_TRIP_LINK.icon className="size-4" aria-hidden />
           Plan a new trip
         </Link>
+
+        {userEmail ? (
+          <div className="mt-3 border-t border-line-soft pt-3">
+            <p className="truncate px-1 text-xs font-medium text-ink-soft">
+              {userName}
+            </p>
+            <p className="truncate px-1 text-xs text-muted">{userEmail}</p>
+            <form action={signOutAction}>
+              <button
+                type="submit"
+                className="mt-2 flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-xs text-muted transition-colors hover:text-ink"
+              >
+                <LogOut className="size-3.5" aria-hidden />
+                Sign out
+              </button>
+            </form>
+          </div>
+        ) : null}
       </div>
     </aside>
   );

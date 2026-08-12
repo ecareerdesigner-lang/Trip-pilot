@@ -26,6 +26,7 @@ const envSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().trim().default("http://localhost:3000"),
 
   ANTHROPIC_API_KEY: z.string().trim().optional(),
+  ANTHROPIC_MODEL: z.string().trim().optional(),
 
   MAPS_PROVIDER: providerModeSchema,
   MAPBOX_ACCESS_TOKEN: z.string().trim().optional(),

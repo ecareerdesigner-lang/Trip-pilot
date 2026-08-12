@@ -1,13 +1,20 @@
 import "server-only";
+import { getPrisma } from "@/lib/db";
 import { unauthorized } from "@/lib/errors";
+import { readSessionUserId } from "@/lib/auth/session";
 
 /**
- * Authentication surface.
+ * Who is asking.
  *
- * Phase 1 ships the interface and a single local owner, because TripPilot is
- * personal-first. Real sessions land in Phase 22. Every route handler and
- * server action calls `requireUser()` from day one, so adding sessions later
- * is a change to this file only — not to fifteen call sites.
+ * Every trip-scoped operation calls `requireUser()` and then
+ * `assertOwnsTrip()`. That has been true since the first phase, which is why
+ * adding real sessions is a change to this file rather than to fifty call
+ * sites.
+ *
+ * With no database configured the app falls back to a single local owner, so
+ * a fresh clone still runs. That fallback is off the moment a database is
+ * present — otherwise anyone could reach a real user's trips by not signing
+ * in, which is the opposite of what auth is for.
  */
 
 export interface SessionUser {
@@ -18,7 +25,7 @@ export interface SessionUser {
   timezone: string;
 }
 
-/** Stable id for the local single-user mode. */
+/** Stable id used when no database is configured. */
 export const LOCAL_OWNER_ID = "00000000-0000-4000-8000-000000000001";
 
 const LOCAL_OWNER: SessionUser = {
@@ -30,8 +37,33 @@ const LOCAL_OWNER: SessionUser = {
 };
 
 export async function getCurrentUser(): Promise<SessionUser | null> {
-  // TODO(Phase 22): read and verify the signed session cookie.
-  return LOCAL_OWNER;
+  const prisma = getPrisma();
+
+  // No database: nothing to sign in to, and nothing to protect.
+  if (!prisma) return LOCAL_OWNER;
+
+  const userId = await readSessionUserId();
+  if (!userId) return null;
+
+  const row = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      currency: true,
+      timezone: true,
+    },
+  });
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name ?? "Traveler",
+    currency: row.currency,
+    timezone: row.timezone,
+  };
 }
 
 /** Throws `AppError('UNAUTHORIZED')` when there is no session. */
@@ -43,16 +75,17 @@ export async function requireUser(): Promise<SessionUser> {
 
 /**
  * Ownership check for every trip-scoped operation.
- * Kept separate from `requireUser` so it is impossible to forget one and
- * still look like the code did an auth check.
+ *
+ * Separate from `requireUser` so it is impossible to forget one and still
+ * look like the code did an auth check.
  */
 export function assertOwnsTrip(
   user: SessionUser,
   trip: { userId: string },
 ): void {
   if (trip.userId !== user.id) {
-    // Reported as "not found" so the existence of another user's trip id is
-    // not confirmed to an attacker probing UUIDs.
+    // Reported as unauthorized rather than forbidden, so probing UUIDs cannot
+    // confirm that another user's trip exists.
     throw unauthorized("You do not have access to this trip.");
   }
 }

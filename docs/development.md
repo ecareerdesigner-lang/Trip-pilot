@@ -71,9 +71,9 @@ Complete:
 17. ✅ Budget engine
 18. ✅ Validation engine
 19. ✅ Optimization engine
-20. ⬜ Trip AI chat
-21. ⬜ Map abstraction
-22. ⬜ Authentication
+20. ◐ Itinerary editing done; AI chat next
+21. ✅ Map abstraction
+22. ✅ Authentication
 23. ⬜ Real API integrations
 24. ⬜ Tests
 25. ⬜ Security review

@@ -12,7 +12,18 @@ import { logger } from "@/lib/logger";
  */
 
 const ENDPOINT = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-6";
+/**
+ * Model to call.
+ *
+ * Overridable, because a hardcoded id becomes wrong the moment Anthropic
+ * publishes a new one — and the failure is an opaque 400 rather than
+ * anything that names the cause.
+ */
+const DEFAULT_MODEL = "claude-sonnet-4-5";
+
+function model(): string {
+  return process.env.ANTHROPIC_MODEL?.trim() || DEFAULT_MODEL;
+}
 const API_VERSION = "2023-06-01";
 
 export interface CompletionRequest {
@@ -27,6 +38,36 @@ export interface CompletionRequest {
 interface AnthropicResponse {
   content?: { type: string; text?: string }[];
   stop_reason?: string;
+}
+
+/**
+ * Turn an API failure into something the person reading it can act on.
+ *
+ * "Could not be reached" is wrong for a 401 — it was reached, and it said no.
+ */
+function explain(status: number, detail: string): string {
+  if (status === 401 || status === 403) {
+    return "The Anthropic API rejected the key. Check ANTHROPIC_API_KEY in .env.";
+  }
+  if (status === 404 || /model/i.test(detail)) {
+    return `The configured model is not available on this account${
+      detail ? ` (${detail})` : ""
+    }. Set ANTHROPIC_MODEL in .env to one your account can use.`;
+  }
+  if (status === 429) {
+    return "Rate limited, or the account is out of credit. Check billing at console.anthropic.com.";
+  }
+  if (status === 400) {
+    // The API already said what was wrong. Appending a guess about
+    // ANTHROPIC_MODEL to a message about billing was worse than saying
+    // nothing — trust the upstream detail when there is one.
+    if (detail) return `The request was rejected: ${detail}`;
+    return "The request was rejected. Check ANTHROPIC_MODEL in .env — the configured model may not exist.";
+  }
+  if (status >= 500) {
+    return "Anthropic's API is having trouble. Try again in a moment.";
+  }
+  return "The request to Anthropic failed. The server log has the detail.";
 }
 
 export async function complete(request: CompletionRequest): Promise<string> {
@@ -53,7 +94,7 @@ export async function complete(request: CompletionRequest): Promise<string> {
         "anthropic-version": API_VERSION,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: model(),
         max_tokens: request.maxTokens ?? 8_000,
         temperature: request.temperature ?? 0.4,
         system: request.system,
@@ -62,14 +103,26 @@ export async function complete(request: CompletionRequest): Promise<string> {
     });
 
     if (!response.ok) {
-      // The body may contain the request echoed back; log the status only.
-      logger.error("Anthropic request failed", { status: response.status });
-      throw new AppError(
-        "AI_FAILED",
-        response.status === 429
-          ? "The planner is busy right now. Try again in a moment."
-          : "The planner could not be reached. Try again in a moment.",
-      );
+      // Anthropic returns a JSON error explaining exactly what was wrong.
+      // Logging only the status meant a wrong model id looked identical to a
+      // dead network, which cost a debugging round.
+      let detail = "";
+      try {
+        const body = (await response.json()) as {
+          error?: { type?: string; message?: string };
+        };
+        detail = body.error?.message ?? "";
+      } catch {
+        detail = "";
+      }
+
+      logger.error("Anthropic request failed", {
+        status: response.status,
+        model: model(),
+        detail,
+      });
+
+      throw new AppError("AI_FAILED", explain(response.status, detail));
     }
 
     const data = (await response.json()) as AnthropicResponse;
