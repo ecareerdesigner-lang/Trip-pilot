@@ -177,6 +177,79 @@ Do not rediscover these.
   journeys into the items around it, using the same backwards-from-arrival
   rule as the plan builder. An edit path that skips `recomputeLegs` will
   produce exactly the impossible schedules Phase 19 spent three rounds fixing.
+- **`buildPlan` leaves `PACE_BUFFER_MINUTES`, not just enough to be possible.**
+  Pushing to exactly `previous end + travel` is arithmetically correct and
+  practically brittle — it produced five "0 min spare" warnings on a real
+  trip, and the validator judges against that same table. Both prompts also
+  ask for the buffer, so the model usually gets it right and the builder makes
+  sure it is never wrong.
+- **Pushing cascades, and a day has a boundary.** Several tight connections
+  gain several buffers; a late day could be pushed past midnight, where the
+  timestamp silently belongs to tomorrow and the item shows up on a day it was
+  never planned for. Items are held at the last minute of their own day and
+  left for the validator to flag.
+- **A planner's start times are requests; `buildPlan` decides the facts.**
+  The heuristic planner computes its own arrival times, so every invariant
+  test passed while the AI planner — which returns clock times a model chose —
+  produced six blocking errors on a real trip. `buildPlan` now pushes any item
+  that cannot start when asked, using the real journey time, and reports the
+  moves in `shiftedItems` rather than correcting silently. It never moves an
+  item earlier: a model that put something at 9 AM meant it.
+- **Test the AI path, not just the heuristic one.** They are different
+  planners with different failure modes, and only one of them was covered.
+- **Arrival is a floor, never a preference.** This exact mistake has been
+  found four times, in four different lines: `Math.max(cursor + travel,
+  meal.minute)` booked dinner at its ideal hour while the traveler was still
+  in a museum; `Math.min(arrival, latest)` pulled check-out in front of the
+  journey to it. Any expression that can move an item *earlier* than
+  `cursor + travel` is wrong. `findSchedulingProblems` in the planner is the
+  catch-all, asserted across paces, cities and must-do combinations in
+  `planner-invariants.test.ts`.
+- **The planner must never emit a schedule its own validator condemns.** When
+  a new scheduling path is added, add a case to
+  `planner-invariants.test.ts` — otherwise the next variant of this bug is
+  found by looking at a screenshot, which is how the previous four were found.
+- **An arrival must not land on top of what is already there.** Moving an
+  item into a day places it at the requested time; `resolveOverlapsAfter`
+  then pushes later items by the smallest amount that clears it and its
+  inbound journey. "A move is not permission to rebuild the day" is right for
+  a day's content and wrong for its times — leaving a collision for the
+  validator is an unfinished edit, not restraint.
+- **Must-dos are placed first, against the whole day.** A 210-minute visit
+  cannot fit between breakfast and lunch, so under the ordinary rules the
+  Statue of Liberty was matched and then never scheduled. Requirements get
+  first refusal and are measured against `dayEndMinute`.
+- **Must-do matching compares significant words, not substrings.**
+  "911 memorial" and "9/11 Memorial & Museum" contain neither one another;
+  punctuation is stripped and weak words dropped before comparing.
+- **Never make the model compute a weekday.** Asked which day 2026-08-28
+  fell on, it answered "Thursday" — it was a Friday — and moved the item
+  there. Dates in the prompt are labelled (`2026-08-28 — Friday, August 28`),
+  previews name the weekday so a mismatch is visible before Apply, and
+  `screenCommands` rejects a command whose date contradicts a weekday the
+  traveler named.
+- **Check what the model returns against what was asked.** The traveler's own
+  message is passed into `screenCommands` for exactly this. Anything derivable
+  from the request is checkable, and checking is cheaper than a wrong edit.
+- **A cross-day move is two day edits.** `moveItemToDay` moves the row in a
+  transaction, then recalculates journeys on the day the item left *and* the
+  day it joined — removing a stop changes what the next stop travels from.
+  Recalculating only the destination leaves the origin day with a journey to
+  something that is no longer there.
+- **Trip ids from URLs must pass `isUuid` before reaching Prisma.** The `id`
+  columns are `@db.Uuid`; Postgres rejects a malformed value at the type level
+  before the query runs, so a bad id in the address bar produced a 500 and a
+  stack trace instead of a 404. Guarded in every trip-scoped repository
+  function and asserted structurally in `repositories/id-safety.test.ts`.
+- **The sandbox has no database, so it exercises the fallback path.** Every
+  repository function returns early without a Prisma handle, which means
+  curl-checking a route here proves nothing about what happens on a machine
+  with `DATABASE_URL` set. This hid the id bug entirely. When a change touches
+  a repository, reason about the branch the sandbox cannot reach.
+- **`src/lib/security.test.ts` encodes the security review.** It asserts
+  every API route authenticates and converts errors safely, that nothing
+  outside sign-up can create a user, that regeneration reuses locations, and
+  that the CSP is present. Read `docs/security.md` before changing any of it.
 - **The local-owner fallback applies only with no database.** `getCurrentUser`
   returns `LOCAL_OWNER` when `getPrisma()` is null and never otherwise — a
   second `return LOCAL_OWNER` would let anyone reach a real user's trips by

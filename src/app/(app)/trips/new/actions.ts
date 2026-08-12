@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { toErrorBody } from "@/lib/errors";
-import { createTrip, ensureLocalUser } from "@/lib/repositories/trips";
+import { createTrip } from "@/lib/repositories/trips";
 import { toTripPayload, tripFormSchema } from "@/lib/validation/trip";
 
 /**
@@ -24,7 +24,6 @@ export async function createTripAction(
     const user = await requireUser();
     const parsed = tripFormSchema.parse(input);
 
-    await ensureLocalUser(user);
     const { id } = await createTrip(user.id, toTripPayload(parsed));
 
     revalidatePath("/dashboard");

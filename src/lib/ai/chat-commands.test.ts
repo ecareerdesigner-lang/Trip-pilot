@@ -221,3 +221,121 @@ describe("screenCommands", () => {
     expect(result.rejected).toEqual([]);
   });
 });
+
+describe("weekday verification", () => {
+  // 2026-08-27 is a Thursday; 2026-08-28 is a Friday.
+  const AUGUST = new Set(["2026-08-26", "2026-08-27", "2026-08-28"]);
+
+  function move(toDate: string): ChatCommand {
+    return { kind: "move", itemId: "i1", toDate, toStartMinute: 600 };
+  }
+
+  it("rejects the mismatch that reached a real trip", () => {
+    // "Move the museum to Thursday" produced a command targeting Friday the
+    // 28th, and it was applied because nothing checked.
+    const result = screenCommands(
+      [move("2026-08-28")],
+      KNOWN,
+      AUGUST,
+      "Move the museum to thursday",
+    );
+    expect(result.accepted).toEqual([]);
+    expect(result.rejected[0]!.reason).toMatch(/not the day you asked for/i);
+  });
+
+  it("names the actual weekday in the rejection", () => {
+    const result = screenCommands(
+      [move("2026-08-28")],
+      KNOWN,
+      AUGUST,
+      "move it to Thursday",
+    );
+    expect(result.rejected[0]!.reason).toContain("Friday");
+  });
+
+  it("accepts a date that matches the request", () => {
+    const result = screenCommands(
+      [move("2026-08-27")],
+      KNOWN,
+      AUGUST,
+      "Move the museum to Thursday",
+    );
+    expect(result.accepted).toHaveLength(1);
+  });
+
+  it("does not interfere when no weekday was named", () => {
+    const result = screenCommands(
+      [move("2026-08-28")],
+      KNOWN,
+      AUGUST,
+      "move the museum later in the trip",
+    );
+    expect(result.accepted).toHaveLength(1);
+  });
+
+  it("accepts either when two weekdays were offered", () => {
+    const result = screenCommands(
+      [move("2026-08-28")],
+      KNOWN,
+      AUGUST,
+      "Thursday or Friday, whichever fits",
+    );
+    expect(result.accepted).toHaveLength(1);
+  });
+
+  it("checks additions as well as moves", () => {
+    const add: ChatCommand = {
+      kind: "add",
+      date: "2026-08-28",
+      type: "RESTAURANT",
+      title: "Dinner",
+      description: "",
+      startMinute: 1_140,
+      durationMinutes: 90,
+      candidateId: null,
+      estimatedCostCents: 0,
+    };
+    const result = screenCommands([add], KNOWN, AUGUST, "add dinner on Thursday");
+    expect(result.accepted).toEqual([]);
+  });
+
+  it("still screens for unknown items and dates first", () => {
+    const result = screenCommands(
+      [move("2027-01-01")],
+      KNOWN,
+      AUGUST,
+      "move it to Thursday",
+    );
+    expect(result.rejected[0]!.reason).toMatch(/not a day of this trip/i);
+  });
+});
+
+describe("previews name the weekday", () => {
+  it("says Friday rather than only the date", () => {
+    // A bare date hides the mistake: "2026-08-28" reads as fine until you
+    // know it is a Friday and you asked for Thursday.
+    const text = describeCommand(
+      { kind: "move", itemId: "i1", toDate: "2026-08-28", toStartMinute: 600 },
+      TITLES,
+    );
+    expect(text).toContain("Friday");
+  });
+
+  it("names the weekday on an addition too", () => {
+    const text = describeCommand(
+      {
+        kind: "add",
+        date: "2026-08-27",
+        type: "RESTAURANT",
+        title: "Dinner",
+        description: "",
+        startMinute: 1_140,
+        durationMinutes: 90,
+        candidateId: null,
+        estimatedCostCents: 0,
+      },
+      TITLES,
+    );
+    expect(text).toContain("Thursday");
+  });
+});

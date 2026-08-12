@@ -76,7 +76,7 @@ Complete:
 22. ✅ Authentication
 23. ⬜ Real API integrations
 24. ⬜ Tests
-25. ⬜ Security review
+25. ✅ Security review
 26. ⬜ UX review
 27. ⬜ Production build
 

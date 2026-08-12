@@ -35,10 +35,12 @@ const askSchema = z.object({
     .array(
       z.object({
         role: z.enum(["user", "assistant"]),
-        content: z.string().trim().max(2_000),
+        content: z.string().trim().max(600),
       }),
     )
-    .max(20)
+    // The client sends this back on every request, so it is both untrusted
+    // input and a cost multiplier. Six turns is what the prompt uses anyway.
+    .max(6)
     .default([]),
 });
 

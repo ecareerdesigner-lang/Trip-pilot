@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { notFound, toErrorBody, databaseUnavailable } from "@/lib/errors";
+import {
+  notFound,
+  rateLimited,
+  toErrorBody,
+  databaseUnavailable,
+} from "@/lib/errors";
+import { aiRateLimiter } from "@/lib/rate-limit";
 import { getPrisma } from "@/lib/db";
 import { getItinerary, applyOptimization } from "@/lib/repositories/trips";
 import { optimizeItinerary } from "@/lib/travel/optimize-itinerary";
@@ -20,6 +26,18 @@ export async function POST(
 
   try {
     const user = await requireUser();
+
+    // Not an AI call, but every run routes each pair of stops on each day.
+    // Unlimited, it is a way to pin a core from a browser tab.
+    const limit = await aiRateLimiter().check(`optimize:${user.id}`);
+    if (!limit.allowed) {
+      throw rateLimited(
+        `You have optimized this trip a lot recently. Try again in ${Math.ceil(
+          limit.retryAfterSeconds / 60,
+        )} minutes.`,
+      );
+    }
+
     const prisma = getPrisma();
     if (!prisma) throw databaseUnavailable();
 

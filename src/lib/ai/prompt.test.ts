@@ -1,5 +1,38 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { SYSTEM_PROMPT, buildUserPrompt } from "@/lib/ai/prompt";
+import { CHAT_SYSTEM_PROMPT, buildChatPrompt } from "@/lib/ai/chat-prompt";
+import type { ItineraryDay } from "@/types/view";
+
+/** A two-day schedule, enough to check how dates are labelled. */
+function buildChatPromptForTest(): string {
+  const day = (dayNumber: number, date: string): ItineraryDay => ({
+    id: `d${dayNumber}`,
+    dayNumber,
+    date,
+    summary: null,
+    items: [],
+    totals: {
+      itemCount: 0,
+      plannedCents: 0,
+      scheduledMinutes: 0,
+      travelMinutes: 0,
+      walkingMeters: 0,
+      openMinutes: 0,
+    },
+    startsAt: null,
+    endsAt: null,
+  });
+
+  return buildChatPrompt({
+    destination: "New York City",
+    days: [day(1, "2026-12-16"), day(2, "2026-12-17")],
+    budget: null,
+    currency: "USD",
+    options: [],
+    history: [],
+    message: "move the museum to Thursday",
+  });
+}
 import { collectCandidates, type CandidateSet } from "@/lib/travel/candidates";
 
 let candidates: CandidateSet;
@@ -97,5 +130,19 @@ describe("user prompt", () => {
 
   it("is deterministic", () => {
     expect(prompt()).toBe(prompt());
+  });
+});
+
+describe("the schedule tells the model which weekday each date is", () => {
+  it("labels every day with its weekday", () => {
+    // Asked to work out that 2026-08-28 is a Friday, a model answered
+    // "Thursday" and moved an item to the wrong day.
+    const text = buildChatPromptForTest();
+    expect(text).toMatch(/2026-12-16 — Wednesday/);
+    expect(text).toMatch(/2026-12-17 — Thursday/);
+  });
+
+  it("tells the model to use the supplied weekday", () => {
+    expect(CHAT_SYSTEM_PROMPT).toMatch(/listed with its weekday/i);
   });
 });

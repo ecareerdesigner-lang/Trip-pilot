@@ -91,7 +91,13 @@ const globalForLimiter = globalThis as unknown as {
   aiRateLimiter: RateLimiter | undefined;
 };
 
-/** Shared limiter for expensive AI routes (generate, optimize, chat). */
+/**
+ * Limiter for routes that cost real money or real CPU.
+ *
+ * Generation and chat call an external model. Optimization does not, but it
+ * runs a routing calculation for every pair of stops on every day — cheap
+ * once, a way to pin a core when pressed in a loop.
+ */
 export function aiRateLimiter(): RateLimiter {
   if (!globalForLimiter.aiRateLimiter) {
     const config = env();

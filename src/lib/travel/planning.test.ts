@@ -379,3 +379,264 @@ describe("parsePlan", () => {
     expect(() => parsePlan(JSON.stringify(bad))).toThrow();
   });
 });
+
+describe("a planner's times are requests, not facts", () => {
+  /**
+   * Everything else here exercises the heuristic planner, which computes its
+   * own arrival times. The AI planner does not — it returns clock times a
+   * model chose, and a model will book dinner at 6:00 while the museum it
+   * placed before it runs until 6:00, thirty-four minutes away.
+   *
+   * These build plans in the shape a model returns them and assert the
+   * builder makes them possible.
+   */
+  function aiShapedPlan(candidateIds: string[]) {
+    return {
+      tripSummary: "",
+      days: [
+        {
+          date: DAYS[0]!,
+          summary: "",
+          // Every item starts before the one before it has ended.
+          items: candidateIds.map((candidateId, index) => ({
+            candidateId,
+            type: "SIGHTSEEING" as const,
+            title: `Stop ${index + 1}`,
+            description: "",
+            startMinute: 600 + index * 30,
+            durationMinutes: 120,
+            satisfiesMustDo: null,
+          })),
+        },
+      ],
+    };
+  }
+
+  function build(plan: ReturnType<typeof aiShapedPlan>) {
+    return buildPlan(plan, {
+      destination: "New York City",
+      travelers: 2,
+      preferences: ["PUBLIC_TRANSPORT_PREFERRED"],
+      candidates,
+      dayDates: DAYS,
+    });
+  }
+
+  it("pushes an item that cannot start when the planner asked", () => {
+    const result = build(aiShapedPlan(["a1", "a2", "a3"]));
+
+    for (let index = 1; index < result.items.length; index += 1) {
+      const previous = result.items[index - 1]!;
+      const current = result.items[index]!;
+      expect(current.startTime.getTime()).toBeGreaterThanOrEqual(
+        previous.endTime.getTime(),
+      );
+    }
+  });
+
+  it("leaves room for the journey between them", () => {
+    const result = build(aiShapedPlan(["a1", "a2", "a3"]));
+
+    for (let index = 1; index < result.items.length; index += 1) {
+      const previous = result.items[index - 1]!;
+      const current = result.items[index]!;
+      const gap =
+        (current.startTime.getTime() - previous.endTime.getTime()) / 60_000;
+      const travel = current.legs.reduce(
+        (sum, leg) => sum + leg.durationMinutes,
+        0,
+      );
+      expect(gap).toBeGreaterThanOrEqual(travel);
+    }
+  });
+
+  it("reports what it moved rather than doing it silently", () => {
+    const result = build(aiShapedPlan(["a1", "a2", "a3"]));
+    expect(result.shiftedItems.length).toBeGreaterThan(0);
+    for (const shifted of result.shiftedItems) {
+      expect(shifted.byMinutes).toBeGreaterThan(0);
+      expect(shifted.title).toBeTruthy();
+    }
+  });
+
+  it("never moves an item earlier than the planner asked", () => {
+    // A model that deliberately put something at 9 AM meant it. Room later
+    // in the day is not a reason to bring it forward.
+    const plan = aiShapedPlan(["a1", "a2", "a3"]);
+    const result = build(plan);
+
+    for (const [index, item] of result.items.entries()) {
+      const requested = plan.days[0]!.items[index]!.startMinute;
+      const actual =
+        item.startTime.getUTCHours() * 60 + item.startTime.getUTCMinutes();
+      expect(actual).toBeGreaterThanOrEqual(requested);
+    }
+  });
+
+  it("leaves a possible schedule exactly as the planner wrote it", () => {
+    const spaced = {
+      tripSummary: "",
+      days: [
+        {
+          date: DAYS[0]!,
+          summary: "",
+          items: [
+            {
+              candidateId: "a1",
+              type: "SIGHTSEEING" as const,
+              title: "First",
+              description: "",
+              startMinute: 540,
+              durationMinutes: 60,
+              satisfiesMustDo: null,
+            },
+            {
+              candidateId: "a2",
+              type: "SIGHTSEEING" as const,
+              title: "Second",
+              description: "",
+              startMinute: 900,
+              durationMinutes: 60,
+              satisfiesMustDo: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = build(spaced);
+    expect(result.shiftedItems).toEqual([]);
+  });
+
+  it("keeps the first item of a day where it was put", () => {
+    const result = build(aiShapedPlan(["a1", "a2"]));
+    const first = result.items[0]!;
+    expect(
+      first.startTime.getUTCHours() * 60 + first.startTime.getUTCMinutes(),
+    ).toBe(600);
+  });
+});
+
+describe("the builder leaves slack, not just enough to be possible", () => {
+  /**
+   * Pushing an item to exactly `previous end + travel` is arithmetically
+   * correct and practically brittle: it produced five "0 min spare" warnings
+   * on a real trip. The validator judges against `PACE_BUFFER_MINUTES`, so a
+   * builder that ignores it warns about its own output.
+   */
+  function tightPlan() {
+    return {
+      tripSummary: "",
+      days: [
+        {
+          date: DAYS[0]!,
+          summary: "",
+          items: ["a1", "a2", "a3"].map((candidateId, index) => ({
+            candidateId,
+            type: "SIGHTSEEING" as const,
+            title: `Stop ${index + 1}`,
+            description: "",
+            startMinute: 600 + index * 30,
+            durationMinutes: 120,
+            satisfiesMustDo: null,
+          })),
+        },
+      ],
+    };
+  }
+
+  function build(pace: "RELAXED" | "BALANCED" | "PACKED") {
+    return buildPlan(tightPlan(), {
+      destination: "New York City",
+      travelers: 2,
+      preferences: ["PUBLIC_TRANSPORT_PREFERRED"],
+      candidates,
+      dayDates: DAYS,
+      pace,
+    });
+  }
+
+  it("leaves the pace's buffer beyond the journey", () => {
+    const result = build("BALANCED");
+
+    for (let index = 1; index < result.items.length; index += 1) {
+      const previous = result.items[index - 1]!;
+      const current = result.items[index]!;
+      const travel = current.legs.reduce(
+        (sum, leg) => sum + leg.durationMinutes,
+        0,
+      );
+      if (travel === 0) continue;
+
+      const gap =
+        (current.startTime.getTime() - previous.endTime.getTime()) / 60_000;
+      // 25 minutes for BALANCED, from PACE_BUFFER_MINUTES.
+      expect(gap).toBeGreaterThanOrEqual(travel + 25);
+    }
+  });
+
+  it("leaves more on a relaxed pace than a packed one", () => {
+    const relaxed = build("RELAXED");
+    const packed = build("PACKED");
+
+    const lastStart = (result: ReturnType<typeof build>) =>
+      result.items[result.items.length - 1]!.startTime.getTime();
+
+    expect(lastStart(relaxed)).toBeGreaterThan(lastStart(packed));
+  });
+
+  it("does not pad two stops in the same place", () => {
+    // No journey, no need for slack.
+    const samePlace = {
+      tripSummary: "",
+      days: [
+        {
+          date: DAYS[0]!,
+          summary: "",
+          items: [
+            {
+              candidateId: "a1",
+              type: "SIGHTSEEING" as const,
+              title: "First",
+              description: "",
+              startMinute: 600,
+              durationMinutes: 60,
+              satisfiesMustDo: null,
+            },
+            {
+              candidateId: "a1",
+              type: "SIGHTSEEING" as const,
+              title: "Still there",
+              description: "",
+              startMinute: 660,
+              durationMinutes: 60,
+              satisfiesMustDo: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = buildPlan(samePlace, {
+      destination: "New York City",
+      travelers: 2,
+      preferences: [],
+      candidates,
+      dayDates: DAYS,
+      pace: "BALANCED",
+    });
+
+    expect(result.shiftedItems).toEqual([]);
+  });
+
+  it("defaults to a balanced buffer when no pace is given", () => {
+    const result = buildPlan(tightPlan(), {
+      destination: "New York City",
+      travelers: 2,
+      preferences: ["PUBLIC_TRANSPORT_PREFERRED"],
+      candidates,
+      dayDates: DAYS,
+    });
+    expect(result.shiftedItems.length).toBeGreaterThan(0);
+  });
+});

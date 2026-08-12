@@ -2,10 +2,12 @@ import { planRoute } from "@/lib/travel/routing";
 import { candidatePoint, type CandidateSet } from "@/lib/travel/candidates";
 import type { Plan, PlannedItem } from "@/lib/ai/schema";
 import type { TransitLeg } from "@/lib/providers/types";
+import { PACE_BUFFER_MINUTES } from "@/lib/constants";
 import type {
   BudgetCategory,
   GeoPoint,
   ItineraryItemType,
+  Pace,
   PlaceRef,
   Priority,
   ReservationStatus,
@@ -60,6 +62,12 @@ export interface BuiltPlan {
   items: BuiltItem[];
   /** Candidate ids the planner referenced that do not exist. */
   unknownCandidateIds: string[];
+  /**
+   * Items moved later than the planner asked, because the journey to them
+   * did not fit. Reported rather than corrected silently — a schedule that
+   * quietly disagrees with what was proposed is worse than one that says so.
+   */
+  shiftedItems: { title: string; date: string; byMinutes: number }[];
   totalEstimatedCents: number;
 }
 
@@ -70,6 +78,16 @@ export interface BuildOptions {
   candidates: CandidateSet;
   /** Days the trip covers, in order. Items on other dates are dropped. */
   dayDates: string[];
+  /**
+   * How much slack to leave beyond the journey itself.
+   *
+   * Pushing an item to exactly `previous end + travel` is arithmetically
+   * correct and practically brittle — it produces a day of connections with
+   * zero minutes spare, where one slow train collapses everything after it.
+   * The validator judges against this same table, so a builder that ignores
+   * it generates warnings about its own output.
+   */
+  pace?: Pace;
 }
 
 const CATEGORY_BY_TYPE: Record<ItineraryItemType, BudgetCategory> = {
@@ -158,6 +176,28 @@ function resolve(
   return "unknown";
 }
 
+/** Minutes to travel between two placed stops. */
+function journeyMinutes(
+  from: { point: GeoPoint; label: string },
+  to: { point: GeoPoint; label: string },
+  options: BuildOptions,
+): number {
+  const route = planRoute({
+    destination: options.destination,
+    origin: from.point,
+    destinationPoint: to.point,
+    originLabel: from.label,
+    destinationLabel: to.label,
+    preferences: options.preferences,
+    travelers: options.travelers,
+  });
+
+  // Matches `legsInto`, which discards a journey too short to be worth
+  // scheduling. Reserving time for a leg that is never drawn would push the
+  // day later for no reason.
+  return route.totalDistanceMeters < 150 ? 0 : route.totalDurationMinutes;
+}
+
 function legsInto(
   from: { point: GeoPoint; label: string } | null,
   to: { point: GeoPoint; label: string } | null,
@@ -188,8 +228,10 @@ function legsInto(
 }
 
 export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
+  const bufferMinutes = PACE_BUFFER_MINUTES[options.pace ?? "BALANCED"];
   const items: BuiltItem[] = [];
   const unknownCandidateIds: string[] = [];
+  const shiftedItems: { title: string; date: string; byMinutes: number }[] = [];
   const chargedStays = new Set<string>();
   const dayIndex = new Map(options.dayDates.map((date, i) => [date, i + 1]));
 
@@ -200,6 +242,7 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
 
     const ordered = [...day.items].sort((a, b) => a.startMinute - b.startMinute);
     let previous: { point: GeoPoint; label: string } | null = null;
+    let previousEnd: number | null = null;
     let sortOrder = 0;
 
     for (const planned of ordered) {
@@ -214,15 +257,62 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
         continue;
       }
 
-      const startTime = at(day.date, planned.startMinute);
-      const endTime = new Date(
-        startTime.getTime() + planned.durationMinutes * 60_000,
-      );
-
       const here =
         resolved.point && resolved.place
           ? { point: resolved.point, label: resolved.place.name }
           : null;
+
+      /**
+       * The planner's start time is a request, not a fact.
+       *
+       * A model is good at deciding what belongs where and poor at arithmetic
+       * over clock times — it will book dinner at 6:00 while the museum it
+       * put before it runs until 6:00, thirty-four minutes away. Rather than
+       * asking it more firmly, the arrival is computed here from the journey
+       * that has to happen, and the item cannot start before it.
+       *
+       * Only ever later, never earlier: an item the planner deliberately
+       * placed at 9 AM is not moved to 8 because there is room.
+       */
+      const requested = at(day.date, planned.startMinute);
+      const travelMinutes = previous && here ? journeyMinutes(previous, here, options) : 0;
+      // Slack beyond the journey. Only applied where there is a journey —
+      // two things in the same building do not need twenty-five minutes
+      // between them.
+      const buffer = travelMinutes > 0 ? bufferMinutes : 0;
+
+      const earliest: number =
+        previousEnd === null
+          ? requested.getTime()
+          : previousEnd + (travelMinutes + buffer) * 60_000;
+
+      // Pushing cascades: five tight connections gain five buffers. A day
+      // that started late enough could be pushed past midnight, where the
+      // timestamp silently belongs to tomorrow and the item appears on a day
+      // it was never planned for. Held at the boundary instead, and reported
+      // as a conflict for the validator rather than moved to another date.
+      const dayStart = at(day.date, 0).getTime();
+      const lastMinuteOfDay = dayStart + (24 * 60 - 1) * 60_000;
+
+      const startTime: Date = new Date(
+        Math.min(Math.max(requested.getTime(), earliest), lastMinuteOfDay),
+      );
+      const endTime: Date = new Date(
+        Math.min(
+          startTime.getTime() + planned.durationMinutes * 60_000,
+          lastMinuteOfDay,
+        ),
+      );
+
+      if (startTime.getTime() !== requested.getTime()) {
+        shiftedItems.push({
+          title: resolved.name ?? planned.title,
+          date: day.date,
+          byMinutes: Math.round(
+            (startTime.getTime() - requested.getTime()) / 60_000,
+          ),
+        });
+      }
 
       const legs = legsInto(previous, here, startTime, options);
 
@@ -251,6 +341,7 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
       });
 
       sortOrder += 1;
+      previousEnd = endTime.getTime();
       if (here) previous = here;
     }
   }
@@ -267,6 +358,7 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
     summary: plan.tripSummary,
     items,
     unknownCandidateIds,
+    shiftedItems,
     totalEstimatedCents,
   };
 }

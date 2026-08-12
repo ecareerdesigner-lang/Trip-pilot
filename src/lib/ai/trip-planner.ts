@@ -137,6 +137,7 @@ export async function generateItinerary(
     preferences: input.transportPreferences,
     candidates,
     dayDates,
+    pace: input.pace,
   });
 
   if (built.unknownCandidateIds.length > 0) {
@@ -147,6 +148,14 @@ export async function generateItinerary(
       `${built.unknownCandidateIds.length} suggested item${
         built.unknownCandidateIds.length === 1 ? " was" : "s were"
       } dropped because they did not match a real place.`,
+    );
+  }
+
+  if (built.shiftedItems.length > 0) {
+    warnings.push(
+      `${built.shiftedItems.length} item${
+        built.shiftedItems.length === 1 ? " was" : "s were"
+      } moved later so there was time to travel between stops.`,
     );
   }
 

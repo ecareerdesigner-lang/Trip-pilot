@@ -1,5 +1,6 @@
 import "server-only";
 import { getPrisma } from "@/lib/db";
+import { isUuid } from "@/lib/ids";
 import { logger } from "@/lib/logger";
 import { databaseUnavailable, notFound } from "@/lib/errors";
 import { sampleDashboardData, sampleTrips } from "@/lib/sample-trips";
@@ -28,6 +29,8 @@ import {
 import { REPLACED_ON_REBUILD } from "@/lib/travel/rebuild-policy";
 import type { ChatCommand } from "@/lib/ai/chat-commands";
 import {
+  recomputeLegs,
+  resolveOverlapsAfter,
   addItem,
   moveItem,
   removeItem,
@@ -101,9 +104,26 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     include: SUMMARY_INCLUDE,
   });
 
-  // No trips yet: show the sample dashboard rather than an empty shell. The
-  // UI labels it, so this cannot be mistaken for real data.
-  if (rows.length === 0) return sampleDashboardData();
+  // A signed-in traveler with no trips gets an empty dashboard, not the
+  // sample one. The sample trips carry ids like "sample-nyc", which are not
+  // uuids — clicking one used to crash the trip page. An empty state that
+  // invites you to plan a trip is the right answer here anyway.
+  if (rows.length === 0) {
+    return {
+      upcoming: [],
+      drafts: [],
+      past: [],
+      nextUp: null,
+      totals: {
+        tripsPlanned: 0,
+        nightsPlanned: 0,
+        destinations: 0,
+        plannedSpendCents: 0,
+        currency: "USD",
+      },
+      source: "database",
+    };
+  }
 
   const trips: TripSummary[] = rows.map(toTripSummary);
   const { upcoming, drafts, past } = categorizeTrips(trips, todayIso());
@@ -188,6 +208,11 @@ export async function getTripSummary(
     return sampleTrips().find((trip) => trip.id === tripId) ?? null;
   }
 
+  // Ids come from the URL. A malformed one cannot identify a trip, and
+  // Postgres rejects a non-uuid at the type level — which reached the user as
+  // a stack trace instead of the 404 it should be.
+  if (!isUuid(tripId)) return null;
+
   const row = await prisma.trip.findFirst({
     where: { id: tripId, userId },
     include: SUMMARY_INCLUDE,
@@ -236,6 +261,7 @@ export async function createTrip(
 export async function deleteTrip(userId: string, tripId: string): Promise<void> {
   const prisma = getPrisma();
   if (!prisma) throw databaseUnavailable();
+  if (!isUuid(tripId)) throw notFound("That trip does not exist.");
 
   // Scoped to the owner, so a wrong id deletes nothing rather than someone
   // else's trip.
@@ -249,28 +275,15 @@ export async function deleteTrip(userId: string, tripId: string): Promise<void> 
  * Phase 22 replaces this with real sign-up. Until then a trip needs a user
  * row to hang off, and the wizard should not fail on a fresh database.
  */
-export async function ensureLocalUser(user: {
-  id: string;
-  email: string;
-  name: string;
-  currency: string;
-  timezone: string;
-}): Promise<void> {
-  const prisma = getPrisma();
-  if (!prisma) return;
-
-  await prisma.user.upsert({
-    where: { id: user.id },
-    update: {},
-    create: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      currency: user.currency,
-      timezone: user.timezone,
-    },
-  });
-}
+/**
+ * Removed.
+ *
+ * This upserted a user row before creating a trip, from the era when there
+ * was no sign-up. With real accounts, `requireUser()` only ever returns a
+ * user that already exists — and a function that can create a row with no
+ * password hash is a way in, not a convenience. Deleted rather than left
+ * unused, because dead code that mints accounts eventually gets called.
+ */
 
 /**
  * Replace a trip's generated itinerary.
@@ -288,6 +301,7 @@ export async function saveGeneratedItinerary(
 ): Promise<{ itemCount: number; legCount: number }> {
   const prisma = getPrisma();
   if (!prisma) throw databaseUnavailable();
+  if (!isUuid(tripId)) throw notFound("That trip does not exist.");
 
   const trip = await prisma.trip.findFirst({
     where: { id: tripId, userId },
@@ -336,9 +350,32 @@ export async function saveGeneratedItinerary(
     const tripDayId = dayIdByDate.get(item.date);
     if (!tripDayId) continue;
 
-    // Places are upserted so the same museum across two trips is one row.
+    // Locations are reused rather than recreated. The comment here used to
+    // claim an upsert while the code created a new row every time, so each
+    // regeneration left another orphaned copy of every place behind —
+    // unbounded growth driven by a button anyone can press repeatedly.
     let locationId: string | null = null;
     if (item.place) {
+      const existing = item.place.providerRef
+        ? await prisma.location.findFirst({
+            where: {
+              providerName: item.place.providerName ?? null,
+              providerRef: item.place.providerRef,
+            },
+            select: { id: true },
+          })
+        : await prisma.location.findFirst({
+            where: {
+              name: item.place.name,
+              latitude: item.place.latitude ?? null,
+              longitude: item.place.longitude ?? null,
+            },
+            select: { id: true },
+          });
+
+      if (existing) {
+        locationId = existing.id;
+      } else {
       const location = await prisma.location.create({
         data: {
           name: item.place.name,
@@ -357,6 +394,7 @@ export async function saveGeneratedItinerary(
         select: { id: true },
       });
       locationId = location.id;
+      }
     }
 
     const created = await prisma.itineraryItem.create({
@@ -458,6 +496,7 @@ export async function getItinerary(
 ): Promise<TripItinerary | null> {
   const prisma = getPrisma();
   if (!prisma) return null;
+  if (!isUuid(tripId)) return null;
 
   const trip = await prisma.trip.findFirst({
     where: { id: tripId, userId },
@@ -515,6 +554,7 @@ export async function getTripBudget(
 ): Promise<BudgetReport | null> {
   const prisma = getPrisma();
   if (!prisma) return null;
+  if (!isUuid(tripId)) return null;
 
   const trip = await prisma.trip.findFirst({
     where: { id: tripId, userId },
@@ -582,6 +622,7 @@ export async function validateTrip(
 ): Promise<ValidationReport | null> {
   const prisma = getPrisma();
   if (!prisma) return null;
+  if (!isUuid(tripId)) return null;
 
   const trip = await prisma.trip.findFirst({
     where: { id: tripId, userId },
@@ -631,6 +672,7 @@ export async function applyOptimization(
 ): Promise<{ movedCount: number }> {
   const prisma = getPrisma();
   if (!prisma) throw databaseUnavailable();
+  if (!isUuid(tripId)) throw notFound("That trip does not exist.");
 
   const trip = await prisma.trip.findFirst({
     where: { id: tripId, userId },
@@ -855,6 +897,110 @@ export async function addItineraryItem(
   );
 }
 
+/**
+ * Move an item to a different day.
+ *
+ * Two edits, not one: the item leaves the day it was on and joins another,
+ * and both days have to recalculate. Journeys are derived from what sits
+ * either side of a stop, so removing something changes the day it left as
+ * much as adding it changes the day it arrived on.
+ *
+ * Done as a transaction. An item that vanished from one day without landing
+ * on the other is worse than a move that did not happen.
+ */
+export async function moveItemToDay(
+  userId: string,
+  tripId: string,
+  itemId: string,
+  toDate: string,
+  toStartMinute: number | null,
+): Promise<void> {
+  const prisma = getPrisma();
+  if (!prisma) throw databaseUnavailable();
+  if (!isUuid(tripId)) throw notFound("That trip does not exist.");
+
+  const trip = await prisma.trip.findFirst({
+    where: { id: tripId, userId },
+    include: { preference: true },
+  });
+  if (!trip) throw notFound("That trip does not exist.");
+
+  const item = await prisma.itineraryItem.findFirst({
+    where: { id: itemId, tripId },
+    select: {
+      id: true,
+      tripDayId: true,
+      startTime: true,
+      durationMinutes: true,
+    },
+  });
+  if (!item) throw notFound("That item is not on the schedule.");
+
+  const target = await prisma.tripDay.findFirst({
+    where: { tripId, date: new Date(`${toDate}T00:00:00.000Z`) },
+    select: { id: true, date: true },
+  });
+  if (!target) throw notFound("That day is not part of this trip.");
+
+  // Already there: a plain re-time, which the day editor handles.
+  if (target.id === item.tripDayId) {
+    if (toStartMinute !== null) {
+      await updateItineraryItem(userId, tripId, item.tripDayId, itemId, {
+        startMinute: toStartMinute,
+      });
+    }
+    return;
+  }
+
+  const startMinute =
+    toStartMinute ??
+    item.startTime.getUTCHours() * 60 + item.startTime.getUTCMinutes();
+
+  const startTime = new Date(
+    target.date.getTime() + startMinute * 60_000,
+  );
+  const endTime = new Date(
+    startTime.getTime() + item.durationMinutes * 60_000,
+  );
+
+  const fromDayId = item.tripDayId;
+
+  await prisma.$transaction([
+    // The legs into this item described a journey from wherever it used to
+    // follow. That context is gone, so they are cleared and rebuilt by the
+    // recalculation below.
+    prisma.transportationLeg.deleteMany({ where: { toItemId: itemId } }),
+    prisma.itineraryItem.update({
+      where: { id: itemId },
+      data: { tripDayId: target.id, startTime, endTime },
+    }),
+  ]);
+
+  // The day it left only needs its journeys rebuilt — a gap is not a
+  // problem. The day it joined may now have two things in the same slot,
+  // which is.
+  await recomputeDayLegs(userId, tripId, fromDayId);
+  await editDay(userId, tripId, target.id, (day, context) =>
+    resolveOverlapsAfter(day, itemId, context),
+  );
+}
+
+/**
+ * Rebuild the journeys on a day from its current schedule.
+ *
+ * Expressed as an edit that changes nothing, so the same code path that
+ * recalculates after any other change recalculates here.
+ */
+async function recomputeDayLegs(
+  userId: string,
+  tripId: string,
+  tripDayId: string,
+): Promise<void> {
+  await editDay(userId, tripId, tripDayId, (day, context) =>
+    recomputeLegs(day, context),
+  );
+}
+
 export async function updateItineraryItem(
   userId: string,
   tripId: string,
@@ -919,6 +1065,7 @@ export async function listTripOptions(
 ): Promise<{ id: string; name: string; kind: string; costCents: number }[]> {
   const prisma = getPrisma();
   if (!prisma) return [];
+  if (!isUuid(tripId)) return [];
 
   const trip = await prisma.trip.findFirst({
     where: { id: tripId, userId },
@@ -978,6 +1125,7 @@ export async function applyChatCommands(
 ): Promise<{ appliedCount: number; failed: string[] }> {
   const prisma = getPrisma();
   if (!prisma) throw databaseUnavailable();
+  if (!isUuid(tripId)) throw notFound("That trip does not exist.");
 
   const dayRows: { id: string; date: Date }[] = await prisma.tripDay.findMany({
     where: { tripId, trip: { userId } },
@@ -1036,20 +1184,14 @@ export async function applyChatCommands(
           durationMinutes: command.durationMinutes,
         });
       } else {
-        // Moving across days is not something the per-item helpers do, so it
-        // is reported rather than half-applied.
-        const targetDayId = dayIdByDate.get(command.toDate);
-        if (targetDayId !== tripDayId) {
-          failed.push(
-            "Moving an item to a different day is not supported yet.",
-          );
-          continue;
-        }
-        if (command.toStartMinute !== null) {
-          await updateItineraryItem(userId, tripId, tripDayId, command.itemId, {
-            startMinute: command.toStartMinute,
-          });
-        }
+        // Handles both a re-time within a day and a move to another one.
+        await moveItemToDay(
+          userId,
+          tripId,
+          command.itemId,
+          command.toDate,
+          command.toStartMinute,
+        );
       }
 
       appliedCount += 1;

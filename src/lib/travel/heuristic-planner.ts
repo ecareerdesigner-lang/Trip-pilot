@@ -144,15 +144,21 @@ function orderActivities(
   const claimed = new Set<string>();
 
   for (const mustDo of mustDos) {
-    const needle = mustDo.title.trim().toLowerCase();
+    const needle = normalizeForMatching(mustDo.title);
     if (needle.length === 0) continue;
 
-    const hit = activities.find(
-      (activity) =>
-        !claimed.has(activity.name) &&
-        (activity.name.toLowerCase().includes(needle) ||
-          needle.includes(activity.name.toLowerCase())),
-    );
+    const hit = activities.find((activity) => {
+      if (claimed.has(activity.name)) return false;
+
+      const name = normalizeForMatching(activity.name);
+      if (name.includes(needle) || needle.includes(name)) return true;
+
+      // "911 memorial" should find "9/11 Memorial & Museum". Substring
+      // matching on raw text misses it entirely: the punctuation differs and
+      // neither string contains the other. Comparing the significant words
+      // catches it, and a museum named for a date is not an edge case.
+      return sharesSignificantWords(needle, name);
+    });
     if (hit) {
       claimed.add(hit.name);
       matched.push({ activity: hit, mustDo: mustDo.title });
@@ -251,6 +257,34 @@ export function planHeuristically(options: HeuristicOptions): Plan {
     const slots = allowance[dayIndex] ?? 0;
     let placedActivities = 0;
 
+    // Must-dos are placed before anything else competes for the day, and are
+    // measured against the whole day rather than the next mealtime. A
+    // 210-minute visit cannot fit between breakfast and lunch, so under the
+    // ordinary rules it was never placed at all — and a requirement that
+    // quietly does not happen is the worst outcome available.
+    while (
+      placedActivities < slots &&
+      pending.some((entry) => entry.mustDo !== null)
+    ) {
+      const before = pending.length;
+      const fitted = takeFitting(
+        pending,
+        activityIdByName,
+        here,
+        cursor,
+        options.dayEndMinute,
+        options,
+        true,
+      );
+      if (!fitted || pending.length === before) break;
+
+      items.push(fitted.item);
+      cursor = fitted.finish;
+      here = fitted.point ?? here;
+      placedActivities += 1;
+    }
+
+
     for (const meal of mealsToday) {
       // Activities before this meal.
       while (placedActivities < slots && pending.length > 0) {
@@ -285,7 +319,12 @@ export function planHeuristically(options: HeuristicOptions): Plan {
           usedRestaurants.add(restaurant.name);
           usedToday.add(restaurant.name);
           const mealTravel = hopMinutes(here, pointOf(restaurant), options);
-          const seated = Math.max(mealStart + mealTravel, meal.minute);
+
+          // The arrival is a floor, never a preference. `Math.max(..., 
+          // meal.minute)` here could pull dinner back to 6:00 PM while the
+          // traveler was still in a museum until 7:00 — the meal was booked
+          // at the ideal hour regardless of where they actually were.
+          const seated = mealStart + mealTravel;
 
           // Past the traveler's stated hours by the time they would sit down.
           // On the last day the journey back to the hotel and check-out have
@@ -337,10 +376,11 @@ export function planHeuristically(options: HeuristicOptions): Plan {
       // their stated end. When the last item is late enough that both cannot
       // hold, arrival wins — a schedule that requires being in two places at
       // once is worse than one that ends half an hour late.
+      // Arrival is a floor. Clamping to `latest` used to pull check-out back
+      // in front of the journey to it — the traveler was in Central Park
+      // until 11:00 and checking out at 11:00, thirty-one minutes away.
       const backToHotel = hopMinutes(here, hotelPoint, options);
-      const arrival = cursor + backToHotel;
-      const latest = options.dayEndMinute - 30;
-      const startMinute = Math.min(Math.max(arrival, checkOutFloor(options)), latest);
+      const startMinute = Math.max(cursor + backToHotel, checkOutFloor(options));
 
       items.push({
         candidateId: hotel[0],
@@ -472,9 +512,11 @@ function takeFitting(
   cursor: number,
   deadline: number,
   options: HeuristicOptions,
+  mustDoOnly = false,
 ): Fitted | null {
   for (let index = 0; index < pending.length; index += 1) {
     const entry = pending[index]!;
+    if (mustDoOnly && entry.mustDo === null) continue;
     const { activity } = entry;
 
     const id = idByName.get(activity.name);
@@ -513,4 +555,116 @@ function takeFitting(
 /** Earliest the traveler would reasonably check out. */
 function checkOutFloor(options: HeuristicOptions): number {
   return options.dayStartMinute;
+}
+
+/**
+ * Strip a title down to what a person meant by it.
+ *
+ * Punctuation and connecting words are what stop "911 memorial" from
+ * matching "9/11 Memorial & Museum" — neither string contains the other, but
+ * they plainly refer to the same place.
+ */
+function normalizeForMatching(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Words too common to identify anything on their own. */
+const WEAK_WORDS = new Set([
+  "the",
+  "a",
+  "an",
+  "of",
+  "and",
+  "at",
+  "in",
+  "on",
+  "to",
+  "museum",
+  "park",
+  "centre",
+  "center",
+  "tour",
+  "visit",
+  "see",
+  "go",
+]);
+
+/**
+ * Whether two normalized titles share enough distinctive words to be the
+ * same place.
+ *
+ * Every significant word of the shorter title must appear in the longer one.
+ * "911 memorial" against "911 memorial museum" leaves {911, memorial}, both
+ * present — a match. "statue liberty" against "empire state building" shares
+ * nothing, so it is not.
+ */
+function sharesSignificantWords(a: string, b: string): boolean {
+  const significant = (value: string): string[] =>
+    value.split(" ").filter((word) => word.length > 1 && !WEAK_WORDS.has(word));
+
+  const first = significant(a);
+  const second = significant(b);
+  if (first.length === 0 || second.length === 0) return false;
+
+  const [shorter, longer] =
+    first.length <= second.length ? [first, second] : [second, first];
+
+  return shorter.every((word) => longer.includes(word));
+}
+
+/**
+ * Check a plan against the rules the validator will apply to it.
+ *
+ * This exists because the same class of bug has now been found four times by
+ * looking at a screenshot: a meal booked at its ideal hour while the traveler
+ * was still somewhere else, a check-out clamped to a deadline in front of the
+ * journey to it, an activity running past a mealtime. Each was a different
+ * line making the same mistake — treating a preferred time as a target rather
+ * than the arrival as a floor.
+ *
+ * A planner that emits schedules its own validator condemns has a bug in the
+ * planner, and it should be the planner that notices. Returns the problems it
+ * finds so a test can assert there are none.
+ */
+export interface PlanProblem {
+  date: string;
+  message: string;
+}
+
+export function findSchedulingProblems(plan: Plan): PlanProblem[] {
+  const problems: PlanProblem[] = [];
+
+  for (const day of plan.days) {
+    const ordered = [...day.items].sort((a, b) => a.startMinute - b.startMinute);
+
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1]!;
+      const current = ordered[index]!;
+      const previousEnds = previous.startMinute + previous.durationMinutes;
+
+      if (current.startMinute < previousEnds) {
+        problems.push({
+          date: day.date,
+          message: `${previous.title} runs until ${clockOf(
+            previousEnds,
+          )} but ${current.title} starts at ${clockOf(current.startMinute)}`,
+        });
+      }
+    }
+  }
+
+  return problems;
+}
+
+function clockOf(minute: number): string {
+  const hour24 = Math.floor(minute / 60) % 24;
+  const minutes = String(minute % 60).padStart(2, "0");
+  const suffix = hour24 < 12 ? "AM" : "PM";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${minutes} ${suffix}`;
 }

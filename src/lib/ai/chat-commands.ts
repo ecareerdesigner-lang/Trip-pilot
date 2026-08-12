@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ITINERARY_ITEM_TYPES } from "@/types/domain";
+import { describeDate, matchesRequestedWeekday } from "@/lib/weekday";
 
 /**
  * What the trip assistant is allowed to do.
@@ -117,10 +118,13 @@ export function describeCommand(
 
   switch (command.kind) {
     case "move": {
+      // The weekday is named here because a bare date hides exactly the kind
+      // of mistake worth catching: "2026-08-28" reads as fine until you know
+      // it is a Friday and you asked for Thursday.
       const when =
         command.toStartMinute === null
-          ? `to ${command.toDate}`
-          : `to ${command.toDate} at ${formatClock(command.toStartMinute)}`;
+          ? `to ${describeDate(command.toDate)}`
+          : `to ${describeDate(command.toDate)} at ${formatClock(command.toStartMinute)}`;
       return `Move ${nameOf(command.itemId)} ${when}`;
     }
     case "resize":
@@ -130,7 +134,7 @@ export function describeCommand(
     case "remove":
       return `Remove ${nameOf(command.itemId)}`;
     case "add":
-      return `Add ${command.title} on ${command.date} at ${formatClock(
+      return `Add ${command.title} on ${describeDate(command.date)} at ${formatClock(
         command.startMinute,
       )} for ${formatDuration(command.durationMinutes)}`;
     default:
@@ -170,6 +174,14 @@ export function screenCommands(
   commands: ChatCommand[],
   knownItemIds: Set<string>,
   tripDates: Set<string>,
+  /**
+   * What the traveler actually asked for.
+   *
+   * When they name a weekday, the date in the command is checkable — and
+   * checking it caught a real failure, where "move the museum to Thursday"
+   * produced a command targeting a Friday and was applied.
+   */
+  requestText = "",
 ): CommandCheck {
   const accepted: ChatCommand[] = [];
   const rejected: { command: ChatCommand; reason: string }[] = [];
@@ -180,6 +192,13 @@ export function screenCommands(
         rejected.push({
           command,
           reason: `${command.date} is not a day of this trip.`,
+        });
+        continue;
+      }
+      if (!matchesRequestedWeekday(command.date, requestText)) {
+        rejected.push({
+          command,
+          reason: `${describeDate(command.date)} is not the day you asked for.`,
         });
         continue;
       }
@@ -195,12 +214,21 @@ export function screenCommands(
       continue;
     }
 
-    if (command.kind === "move" && !tripDates.has(command.toDate)) {
-      rejected.push({
-        command,
-        reason: `${command.toDate} is not a day of this trip.`,
-      });
-      continue;
+    if (command.kind === "move") {
+      if (!tripDates.has(command.toDate)) {
+        rejected.push({
+          command,
+          reason: `${command.toDate} is not a day of this trip.`,
+        });
+        continue;
+      }
+      if (!matchesRequestedWeekday(command.toDate, requestText)) {
+        rejected.push({
+          command,
+          reason: `${describeDate(command.toDate)} is not the day you asked for.`,
+        });
+        continue;
+      }
     }
 
     accepted.push(command);

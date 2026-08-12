@@ -24,6 +24,27 @@ const DEFAULT_MODEL = "claude-sonnet-4-5";
 function model(): string {
   return process.env.ANTHROPIC_MODEL?.trim() || DEFAULT_MODEL;
 }
+
+/**
+ * The API key, trimmed.
+ *
+ * A trailing newline from an editor produces a 401 that is
+ * indistinguishable from a revoked key, and sends whoever is debugging it to
+ * the console looking for a problem that is not there. Trimming costs
+ * nothing; the shape check turns a vague auth failure into a specific one.
+ */
+function apiKey(): string {
+  const key = (env().ANTHROPIC_API_KEY ?? "").trim();
+
+  if (!key.startsWith("sk-ant-")) {
+    throw new AppError(
+      "AI_FAILED",
+      "ANTHROPIC_API_KEY does not look like an Anthropic key — it should begin with `sk-ant-`. Check .env.",
+    );
+  }
+
+  return key;
+}
 const API_VERSION = "2023-06-01";
 
 export interface CompletionRequest {
@@ -90,7 +111,7 @@ export async function complete(request: CompletionRequest): Promise<string> {
       signal: controller.signal,
       headers: {
         "content-type": "application/json",
-        "x-api-key": env().ANTHROPIC_API_KEY!,
+        "x-api-key": apiKey(),
         "anthropic-version": API_VERSION,
       },
       body: JSON.stringify({

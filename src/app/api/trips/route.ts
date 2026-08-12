@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { toErrorBody } from "@/lib/errors";
-import { createTrip, ensureLocalUser, listTrips } from "@/lib/repositories/trips";
+import { createTrip, listTrips } from "@/lib/repositories/trips";
 import { toTripPayload, tripFormSchema } from "@/lib/validation/trip";
 
 /**
@@ -32,7 +32,6 @@ export async function POST(request: Request) {
     // have come from the form.
     const parsed = tripFormSchema.parse(await request.json());
 
-    await ensureLocalUser(user);
     const { id } = await createTrip(user.id, toTripPayload(parsed));
 
     return NextResponse.json({ id }, { status: 201 });

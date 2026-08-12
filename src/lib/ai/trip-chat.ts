@@ -91,7 +91,14 @@ export async function askAssistant(input: ChatInput): Promise<ChatOutcome> {
   const knownItemIds = new Set(titleById.keys());
   const tripDates = new Set(input.days.map((day) => day.date));
 
-  const screened = screenCommands(parsed.commands, knownItemIds, tripDates);
+    // The traveler's own words are passed in so a named weekday can be checked
+  // against the date the assistant chose.
+  const screened = screenCommands(
+    parsed.commands,
+    knownItemIds,
+    tripDates,
+    input.message,
+  );
 
   if (screened.rejected.length > 0) {
     logger.warn("Assistant proposed commands that could not be applied", {

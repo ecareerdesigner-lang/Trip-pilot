@@ -4,6 +4,7 @@ import type { FoodPreference, Pace, TransportPreference } from "@/types/domain";
 import {
   FOOD_PREFERENCE_LABEL,
   PACE_ACTIVITY_TARGET,
+  PACE_BUFFER_MINUTES,
   PACE_DESCRIPTION,
   TRANSPORT_PREFERENCE_LABEL,
 } from "@/lib/constants";
@@ -47,7 +48,7 @@ Rules you must follow:
 1. Every item that happens at a place must reference one of the supplied candidate ids. Never write an id that was not given to you.
 2. Must-dos are requirements. Schedule every must-do that matches a supplied candidate before adding anything optional. If a must-do has no matching candidate, leave it out and do not substitute something similar.
 3. Never schedule a place outside its opening hours, and never let an item run past closing.
-4. Leave time between items. The traveler has to physically get from one place to the next; the app computes those journeys from your schedule, so items that overlap or sit back to back will produce an impossible day.
+4. Leave real time between items. The traveler has to physically cross the city, and the app computes those journeys from your schedule. Getting between two places usually takes 20 to 40 minutes, and on top of that leave the slack stated below — a day where every connection is exact falls apart the moment one train is late. Items that overlap or sit back to back produce a day nobody can follow.
 5. Schedule meals at mealtimes and do not schedule the same restaurant twice.
 6. Respect the requested pace. A relaxed day has fewer items with more room around them.
 7. Stay inside the traveler's stated hours.
@@ -88,6 +89,11 @@ export function buildUserPrompt(input: PromptInput): string {
     `Pace: ${input.pace} — ${PACE_DESCRIPTION[input.pace]} Aim for about ${
       PACE_ACTIVITY_TARGET[input.pace]
     } scheduled things per day.`,
+  );
+  // The number the builder enforces. Stated rather than implied, so the
+  // model is not guessing at what "slack" means.
+  lines.push(
+    `Leave at least ${PACE_BUFFER_MINUTES[input.pace]} minutes of slack after each journey, on top of the travel time itself.`,
   );
   lines.push(`Food preference: ${FOOD_PREFERENCE_LABEL[input.foodPreference]}`);
 

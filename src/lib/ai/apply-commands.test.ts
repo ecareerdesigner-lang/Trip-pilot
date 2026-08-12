@@ -253,3 +253,82 @@ describe("safety", () => {
     );
   });
 });
+
+describe("cross-day moves recalculate both days", () => {
+  it("rebuilds journeys on the day the item left", () => {
+    // Removing a stop changes what the following stop is travelling from, so
+    // the day it left needs recalculating as much as the day it joined.
+    const before = fixture();
+    const result = applyCommands(
+      before,
+      [{ kind: "move", itemId: "a", toDate: "2026-12-17", toStartMinute: 900 }],
+      CONTEXT,
+    );
+
+    expect(result.changedDates).toContain("2026-12-16");
+    expect(result.changedDates).toContain("2026-12-17");
+  });
+
+  it("leaves the origin day coherent", () => {
+    const result = applyCommands(
+      fixture(),
+      [{ kind: "move", itemId: "a", toDate: "2026-12-17", toStartMinute: 900 }],
+      CONTEXT,
+    );
+
+    for (const day of result.days) {
+      for (let index = 1; index < day.items.length; index += 1) {
+        const previous = day.items[index - 1]!;
+        const current = day.items[index]!;
+        expect(Date.parse(current.startTime)).toBeGreaterThanOrEqual(
+          Date.parse(previous.endTime),
+        );
+      }
+    }
+  });
+
+  it("does not leave the item on both days", () => {
+    const result = applyCommands(
+      fixture(),
+      [{ kind: "move", itemId: "a", toDate: "2026-12-17", toStartMinute: 900 }],
+      CONTEXT,
+    );
+
+    const appearances = result.days.flatMap((day) =>
+      day.items.filter((item) => item.id === "a"),
+    );
+    expect(appearances).toHaveLength(1);
+  });
+
+  it("moves back again without loss", () => {
+    const there = applyCommands(
+      fixture(),
+      [{ kind: "move", itemId: "a", toDate: "2026-12-17", toStartMinute: 900 }],
+      CONTEXT,
+    );
+    const back = applyCommands(
+      there.days,
+      [{ kind: "move", itemId: "a", toDate: "2026-12-16", toStartMinute: 540 }],
+      CONTEXT,
+    );
+
+    expect(count(back.days)).toBe(3);
+    const moved = back.days[0]!.items.find((item) => item.id === "a")!;
+    expect(moved.title).toBe("Item a");
+    expect(moved.estimatedCostCents).toBe(1_000);
+  });
+
+  it("keeps the trip's total item count", () => {
+    const result = applyCommands(
+      fixture(),
+      [
+        { kind: "move", itemId: "a", toDate: "2026-12-17", toStartMinute: 900 },
+        { kind: "move", itemId: "b", toDate: "2026-12-17", toStartMinute: 1_020 },
+      ],
+      CONTEXT,
+    );
+    expect(count(result.days)).toBe(3);
+    expect(result.days[0]!.items).toHaveLength(0);
+    expect(result.days[1]!.items).toHaveLength(3);
+  });
+});

@@ -317,3 +317,52 @@ export function earliestStartMinute(
 
   return minuteOf(previous.endTime) + route.totalDurationMinutes;
 }
+
+/**
+ * Push later items aside so an arrival fits.
+ *
+ * Dropping an item into a day it was not on lands it in whatever slot the
+ * traveler asked for, which may already be occupied — a museum moved to
+ * 10:00 leaves the 10:07 walk in the park starting seven minutes later,
+ * inside it.
+ *
+ * "A request to move one thing is not permission to rebuild the day" is the
+ * right instinct for the *content* of a day, and the wrong one for its
+ * times. Leaving a collision for the validator to report is not restraint,
+ * it is an unfinished edit.
+ *
+ * So: anything that now overlaps the arrival, or the journey to whatever
+ * follows it, moves later by the smallest amount that clears it. Order is
+ * preserved, nothing is dropped, and items before the arrival are untouched.
+ */
+export function resolveOverlapsAfter(
+  day: ItineraryDay,
+  arrivalId: string,
+  context: EditContext,
+): EditResult {
+  const ordered = [...day.items].sort(byStart);
+  const index = ordered.findIndex((item) => item.id === arrivalId);
+  if (index === -1) return { day, recomputedItemIds: [] };
+
+  const arrival = ordered[index]!;
+  const next = ordered[index + 1];
+  if (!next) return recomputeLegs({ ...day, items: ordered }, context);
+
+  const arrivalEnds = Date.parse(arrival.endTime);
+  const nextStarts = Date.parse(next.startTime);
+
+  // The journey between them has to fit too, or clearing the overlap just
+  // produces a different impossible schedule.
+  const travelMinutes = next.legs.reduce(
+    (sum, leg) => sum + leg.durationMinutes,
+    0,
+  );
+  const needed = arrivalEnds + travelMinutes * MINUTE;
+
+  if (nextStarts >= needed) {
+    return recomputeLegs({ ...day, items: ordered }, context);
+  }
+
+  const shortfall = Math.ceil((needed - nextStarts) / MINUTE);
+  return shiftFrom({ ...day, items: ordered }, next.id, shortfall, context);
+}
