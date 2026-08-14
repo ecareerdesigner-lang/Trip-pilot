@@ -98,6 +98,12 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
   const prisma = getPrisma();
   if (!prisma) return sampleDashboardData();
 
+  const owner = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { currency: true },
+  });
+  const userCurrency = owner?.currency ?? "USD";
+
   const rows = await prisma.trip.findMany({
     where: { userId },
     orderBy: { startDate: "asc" },
@@ -119,7 +125,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
         nightsPlanned: 0,
         destinations: 0,
         plannedSpendCents: 0,
-        currency: "USD",
+        currency: userCurrency,
       },
       source: "database",
     };
@@ -144,7 +150,9 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
       nightsPlanned: nights,
       destinations: new Set(trips.map((trip) => trip.destination)).size,
       plannedSpendCents: trips.reduce((sum, trip) => sum + trip.plannedCents, 0),
-      currency: trips[0]?.currency ?? "USD",
+      // Totals span every trip, so they are shown in the traveler's own
+      // currency rather than whichever trip happens to be first.
+      currency: userCurrency,
     },
     source: "database",
   };
@@ -240,10 +248,20 @@ export async function createTrip(
 
   // Nested writes run in a single implicit transaction, so no explicit
   // $transaction is needed. Everything lands together or nothing does.
+  // A trip is priced in the currency the traveler was using when they made
+  // it, and keeps it. Relabelling an existing trip when the setting changes
+  // would show a $3,000 budget as €3,000 — the same number wearing a
+  // different symbol, misstating what was actually budgeted.
+  const owner = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { currency: true },
+  });
+
   const created = await prisma.trip.create({
     data: {
       userId,
       ...buildTripScalars(payload),
+      currency: owner?.currency ?? "USD",
       status: "DRAFT",
       preference: { create: buildPreferenceRow(payload) },
       days: { createMany: { data: days } },

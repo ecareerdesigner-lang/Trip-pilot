@@ -3,15 +3,14 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { CalendarDays, Users, Wallet, ListChecks } from "lucide-react";
 import { requireUser } from "@/lib/auth";
-import { getTripSummary } from "@/lib/repositories/trips";
+import { getTripSummary, validateTrip } from "@/lib/repositories/trips";
 import { PageHeader } from "@/components/layout/page-header";
-import { Card, CardBody } from "@/components/ui/card";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Stat } from "@/components/ui/stat";
 import { TripStatusBadge } from "@/components/ui/badge";
-import { NotBuiltYet } from "@/components/ui/not-built-yet";
+import { buttonStyles } from "@/components/ui/button";
 import { TripTabs } from "@/components/trips/trip-tabs";
 import { GenerateButton } from "@/components/trips/generate-button";
-import { buttonStyles } from "@/components/ui/button";
 import { formatDateRange, daysBetweenInclusive, relativeToToday } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 
@@ -27,6 +26,10 @@ export default async function TripPage({
   const trip = await getTripSummary(user.id, tripId);
 
   if (!trip) notFound();
+
+  // Only worth asking once there is something to validate.
+  const validation =
+    trip.itemCount > 0 ? await validateTrip(user.id, tripId) : null;
 
   const days = daysBetweenInclusive(trip.startDate, trip.endDate);
 
@@ -96,16 +99,81 @@ export default async function TripPage({
         <GenerateButton tripId={trip.id} hasItinerary={trip.itemCount > 0} />
       </div>
 
-      <div className="mt-6">
-        <NotBuiltYet
-          feature="The itinerary view"
-          phase="Phases 15 to 21"
-          detail={
-            trip.itemCount > 0
-              ? `This trip has ${trip.itemCount} scheduled items with their journeys. The timeline, map, budget and transportation views that display them are next.`
-              : "Build an itinerary above, then the timeline and map views will render it."
-          }
-        />
+      {/*
+        The overview is where a trip lands by default, so it answers the
+        question somebody actually arrives with: is this ready, and what
+        needs my attention. It previously said the itinerary view was "next"
+        long after it was built.
+      */}
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <Card>
+          <CardHeader title="Where it stands" />
+          <CardBody className="space-y-2 text-sm">
+            {trip.itemCount === 0 ? (
+              <p className="text-muted">
+                Nothing scheduled yet. Build an itinerary and the days, routes
+                and budget fill in.
+              </p>
+            ) : (
+              <>
+                <p className="text-ink">
+                  {trip.itemCount} things scheduled across {days} days.
+                </p>
+                {validation ? (
+                  validation.counts.ERROR > 0 ? (
+                    <p className="text-alert">
+                      {validation.counts.ERROR}{" "}
+                      {validation.counts.ERROR === 1 ? "problem" : "problems"}{" "}
+                      would stop this trip working as planned.
+                    </p>
+                  ) : validation.counts.WARNING > 0 ? (
+                    <p className="text-signal">
+                      {validation.counts.WARNING} things worth checking before
+                      you go.
+                    </p>
+                  ) : (
+                    <p className="text-route-deep">
+                      Everything checks out — the days work as scheduled.
+                    </p>
+                  )
+                ) : null}
+              </>
+            )}
+          </CardBody>
+          {trip.itemCount > 0 ? (
+            <CardBody className="border-t border-line-soft">
+              <Link
+                href={`/trips/${tripId}/itinerary`}
+                className={buttonStyles("secondary", "sm")}
+              >
+                Open the itinerary
+              </Link>
+            </CardBody>
+          ) : null}
+        </Card>
+
+        <Card>
+          <CardHeader title="Must-dos" />
+          <CardBody>
+            {trip.mustDoCount === 0 ? (
+              <p className="text-sm text-muted">
+                None set. Anything you refuse to miss gets scheduled first.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-ink">
+                  {trip.mustDoScheduledCount} of {trip.mustDoCount} scheduled.
+                </p>
+                {trip.mustDoScheduledCount < trip.mustDoCount ? (
+                  <p className="mt-1 text-sm text-signal">
+                    The rest could not be matched to a place in this
+                    destination.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </CardBody>
+        </Card>
       </div>
     </>
   );

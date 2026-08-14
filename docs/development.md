@@ -77,7 +77,7 @@ Complete:
 23. ⬜ Real API integrations
 24. ⬜ Tests
 25. ✅ Security review
-26. ⬜ UX review
+26. ✅ UX review
 27. ⬜ Production build
 
 Docs, `AGENTS.md` and the seed script were added alongside phases 1–10.

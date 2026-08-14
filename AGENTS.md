@@ -246,6 +246,17 @@ Do not rediscover these.
   curl-checking a route here proves nothing about what happens on a machine
   with `DATABASE_URL` set. This hid the id bug entirely. When a change touches
   a repository, reason about the branch the sandbox cannot reach.
+- **Currency belongs to a trip, not to the app.** A trip is priced in
+  whatever the traveler was using when they made it and keeps it; changing
+  the setting affects new trips and cross-trip totals only. Relabelling an
+  existing trip would show a $3,000 budget as €3,000 — the same number in a
+  different symbol, misstating it by whatever the rate happens to be.
+  `createTrip` reads the owner's currency; nothing rewrites an existing one.
+- **Placeholder panels go stale and lie.** The trip Overview said the
+  itinerary and map views were "coming next" for days after they shipped, on
+  the default landing page for every trip. When a phase completes, grep for
+  `NotBuiltYet` and check nothing still claims it is pending.
+  `docs/ux-review.md` lists what is still genuinely missing.
 - **`src/lib/security.test.ts` encodes the security review.** It asserts
   every API route authenticates and converts errors safely, that nothing
   outside sign-up can create a user, that regeneration reuses locations, and
