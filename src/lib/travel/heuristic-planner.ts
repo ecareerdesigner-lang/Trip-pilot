@@ -391,6 +391,24 @@ export function planHeuristically(options: HeuristicOptions): Plan {
         durationMinutes: 30,
         satisfiesMustDo: null,
       });
+    } else if (hotel) {
+      // Every other night ends back at the hotel. This was implicit before:
+      // nothing scheduled the return, and the next day's first leg was
+      // still computed as if starting from the hotel regardless — which
+      // meant the traveler silently teleported there overnight. Scheduled
+      // here the same way check-out is: as a real journey from wherever the
+      // day actually ended, not from an assumed position.
+      const backToHotel = hopMinutes(here, hotelPoint, options);
+
+      items.push({
+        candidateId: hotel[0],
+        type: "LODGING",
+        title: `Return to ${hotel[1].name}`,
+        description: "End of the day.",
+        startMinute: cursor + backToHotel,
+        durationMinutes: 15,
+        satisfiesMustDo: null,
+      });
     }
 
     // A day with nothing in it would fail the schema, and is not a plan.

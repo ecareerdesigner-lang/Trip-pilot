@@ -27,6 +27,8 @@ const PAYLOAD: TripPayload = {
   pace: "BALANCED",
   foodPreference: "LOCAL_FAVORITES",
   transportPreferences: ["PUBLIC_TRANSPORT_PREFERRED"],
+  dayStartMinute: 480,
+  dayEndMinute: 1320,
   mustDos: [{ title: "See a Broadway show", description: "" }],
   notes: "  Anniversary trip.  ",
 };

@@ -98,6 +98,14 @@ export interface TimelineItem {
   locationName: string | null;
   latitude: number | null;
   longitude: number | null;
+  /**
+   * A real link to the place — Google Maps if the location came from
+   * Google (covers directions, hours, phone number and the venue's own
+   * website if Google has one), null otherwise. Built from the provider's
+   * own place id rather than a stored URL, so it can never go stale the
+   * way a scraped website link would.
+   */
+  placeLink: string | null;
   estimatedCostCents: number;
   reservationRequired: boolean;
   reservationStatus: ReservationStatus;

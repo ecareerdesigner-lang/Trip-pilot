@@ -93,6 +93,8 @@ async function runPipeline(
               name: item.place.name,
               latitude: item.place.latitude ?? null,
               longitude: item.place.longitude ?? null,
+              providerRef: item.place.providerRef ?? null,
+              providerName: item.place.providerName ?? null,
             }
           : null,
         inboundLegs: item.legs.map((leg) => ({

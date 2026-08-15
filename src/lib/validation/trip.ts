@@ -27,6 +27,25 @@ import {
 
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MONEY_TEXT = /^\d{1,7}(\.\d{1,2})?$/;
+const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const timeOfDay = z
+  .string({ message: "Pick a time." })
+  .trim()
+  .regex(TIME_OF_DAY, { message: "Pick a time." });
+
+/** "08:00" -> 480. Assumes the string already passed the timeOfDay regex. */
+export function timeToMinutes(value: string): number {
+  const [hours, minutes] = value.split(":").map(Number);
+  return (hours ?? 0) * 60 + (minutes ?? 0);
+}
+
+/** 480 -> "08:00", for populating a form field from stored minutes. */
+export function minutesToTime(minutes: number): string {
+  const hours = Math.floor(minutes / 60) % 24;
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+}
 
 /** Blank means "not specified", which is different from zero. */
 const moneyText = z
@@ -98,6 +117,8 @@ export const tripFormSchema = z
       message: "Pick a food preference.",
     }),
     transportPreferences: z.array(z.enum(TRANSPORT_PREFERENCES)).default([]),
+    dayStartTime: timeOfDay,
+    dayEndTime: timeOfDay,
 
     // Step 5 — must-dos
     mustDos: z
@@ -153,6 +174,18 @@ export const tripFormSchema = z
         });
       }
     }
+
+    if (
+      TIME_OF_DAY.test(value.dayStartTime) &&
+      TIME_OF_DAY.test(value.dayEndTime) &&
+      timeToMinutes(value.dayEndTime) - timeToMinutes(value.dayStartTime) < 120
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["dayEndTime"],
+        message: "Leave at least two hours between the start and end of the day.",
+      });
+    }
   });
 
 /**
@@ -181,6 +214,8 @@ export interface TripFormValues {
   pace: Pace;
   foodPreference: FoodPreference;
   transportPreferences: TransportPreference[];
+  dayStartTime: string;
+  dayEndTime: string;
   mustDos: { title: string; description: string }[];
   notes: string;
 }
@@ -205,6 +240,8 @@ export const EMPTY_TRIP_FORM: TripFormValues = {
   pace: "BALANCED",
   foodPreference: "NO_PREFERENCE",
   transportPreferences: [],
+  dayStartTime: "08:00",
+  dayEndTime: "22:00",
   mustDos: [],
   notes: "",
 };
@@ -245,6 +282,8 @@ export interface TripPayload {
   pace: TripFormParsed["pace"];
   foodPreference: TripFormParsed["foodPreference"];
   transportPreferences: TripFormParsed["transportPreferences"];
+  dayStartMinute: number;
+  dayEndMinute: number;
   mustDos: { title: string; description: string }[];
   notes: string;
 }
@@ -270,6 +309,8 @@ export function toTripPayload(values: TripFormParsed): TripPayload {
     pace: values.pace,
     foodPreference: values.foodPreference,
     transportPreferences: values.transportPreferences,
+    dayStartMinute: timeToMinutes(values.dayStartTime),
+    dayEndMinute: timeToMinutes(values.dayEndTime),
     mustDos: values.mustDos,
     notes: values.notes,
   };
@@ -301,7 +342,7 @@ export const STEP_FIELDS = [
     "activityBudget",
     "localTransportationBudget",
   ],
-  ["pace", "foodPreference", "transportPreferences"],
+  ["pace", "foodPreference", "transportPreferences", "dayStartTime", "dayEndTime"],
   ["mustDos"],
   ["notes"],
   [],

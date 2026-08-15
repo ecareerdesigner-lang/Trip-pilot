@@ -202,6 +202,7 @@ describe("ledgerFromDays", () => {
     locationName: null,
     latitude: null,
     longitude: null,
+    placeLink: null,
     estimatedCostCents: 8_400,
     reservationRequired: false,
     reservationStatus: "NOT_REQUIRED",

@@ -53,6 +53,8 @@ Rules you must follow:
 6. Respect the requested pace. A relaxed day has fewer items with more room around them.
 7. Stay inside the traveler's stated hours.
 8. Cluster each day geographically. Do not cross the city and come back.
+9. Schedule the chosen hotel as a LODGING item using its own candidateId: check-in as the first item on the first day, a short "Return to [hotel name]" item as the last item of every day except the final day, and "Check out of [hotel name]" as the last item on the final day. The traveler sleeps at the hotel every night — leaving this out silently implies they teleport there.
+10. If a must-do's title or description names a specific time — "the 8PM concert," "doors at 7:30" — the startMinute you write for that item must be that time, not just describe it. Writing an accurate description and a contradictory startMinute in the same response is worse than getting both wrong, because it reads as correct until the traveler is standing at the wrong place at the wrong hour.
 
 Return ONLY a JSON object. No prose, no markdown fences, no commentary.
 

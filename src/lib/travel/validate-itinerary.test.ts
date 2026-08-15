@@ -35,6 +35,7 @@ function item(overrides: Partial<TimelineItem> = {}): TimelineItem {
     locationName: null,
     latitude: null,
     longitude: null,
+    placeLink: null,
     estimatedCostCents: 0,
     reservationRequired: false,
     reservationStatus: "NOT_REQUIRED",
@@ -290,6 +291,99 @@ describe("meals", () => {
       ]),
     ]);
     expect(codes(report)).not.toContain("NO_MEAL");
+  });
+});
+
+describe("description time mismatch", () => {
+  // This is the exact shape of a real bug: the AI wrote "Enjoy the Red Clay
+  // Strays concert at 8PM" as the item's description, and scheduled the
+  // same item to start at 11:59 PM in the same response. Both values are
+  // individually valid — nothing in the schema catches a model's own
+  // narrative disagreeing with its own structured output.
+  it("flags an item whose description names a time far from its schedule", () => {
+    const report = validateItinerary([
+      day([
+        item({
+          id: "concert",
+          title: "ICON Park",
+          description: "Enjoy the Red Clay Strays concert at 8PM, the main event of your trip.",
+          startTime: at(23, 59),
+          endTime: at(23, 59),
+          durationMinutes: 0,
+        }),
+      ]),
+    ]);
+    const warning = report.warnings.find(
+      (w) => w.code === "DESCRIPTION_TIME_MISMATCH",
+    );
+    expect(warning).toBeDefined();
+    expect(warning?.message).toMatch(/8:00 PM/);
+  });
+
+  it("says nothing when the description matches the schedule", () => {
+    const report = validateItinerary([
+      day([
+        item({
+          id: "concert",
+          title: "Concert",
+          description: "The show starts at 8PM.",
+          startTime: at(20),
+          endTime: at(22),
+          durationMinutes: 120,
+        }),
+      ]),
+    ]);
+    expect(codes(report)).not.toContain("DESCRIPTION_TIME_MISMATCH");
+  });
+
+  it("says nothing when a description mentions no time at all", () => {
+    const report = validateItinerary([
+      day([
+        item({
+          id: "a",
+          title: "Museum",
+          description: "A quiet afternoon among the exhibits.",
+          startTime: at(23, 59),
+          endTime: at(23, 59),
+          durationMinutes: 0,
+        }),
+      ]),
+    ]);
+    expect(codes(report)).not.toContain("DESCRIPTION_TIME_MISMATCH");
+  });
+
+  it("does not mistake a year or a plain number for a time", () => {
+    const report = validateItinerary([
+      day([
+        item({
+          id: "a",
+          title: "Historic Hall",
+          description: "Built in 1900, this hall has hosted 1904 events since opening.",
+          startTime: at(23, 59),
+          endTime: at(23, 59),
+          durationMinutes: 0,
+        }),
+      ]),
+    ]);
+    expect(codes(report)).not.toContain("DESCRIPTION_TIME_MISMATCH");
+  });
+
+  it("tolerates a small, reasonable gap between description and schedule", () => {
+    const report = validateItinerary([
+      day([
+        item({
+          id: "a",
+          title: "Dinner",
+          description: "A table around 7PM.",
+          // 40 minutes off — comfortably inside the tolerance a real
+          // pacing adjustment would produce.
+          startTime: at(19, 40),
+          endTime: at(21),
+          durationMinutes: 80,
+        }),
+      ]),
+    ]);
+    expect(codes(report)).not.toContain("DESCRIPTION_TIME_MISMATCH");
   });
 });
 

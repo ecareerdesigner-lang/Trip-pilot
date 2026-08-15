@@ -68,6 +68,15 @@ export interface BuiltPlan {
    * quietly disagrees with what was proposed is worse than one that says so.
    */
   shiftedItems: { title: string; date: string; byMinutes: number }[];
+  /**
+   * Activity candidate ids the planner referenced more than once. Only the
+   * first placement is built; later references are dropped rather than
+   * scheduled again. Restaurants and lodging are exempt — both legitimately
+   * repeat across a trip. Reported, not silently discarded — the AI
+   * planner has no memory of what it already placed, and this is the only
+   * place that catches it.
+   */
+  duplicateCandidateIds: string[];
   totalEstimatedCents: number;
 }
 
@@ -232,7 +241,19 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
   const items: BuiltItem[] = [];
   const unknownCandidateIds: string[] = [];
   const shiftedItems: { title: string; date: string; byMinutes: number }[] = [];
+  const duplicateCandidateIds: string[] = [];
   const chargedStays = new Set<string>();
+  // Activities already scheduled. A hotel legitimately repeats (check-in,
+  // check-out, every evening return, handled by chargedStays), and so does
+  // a restaurant — a five-day trip against a small restaurant pool
+  // realistically returns to the same place for breakfast more than once.
+  // Only an activity is meant to be visited a single time per trip: the AI
+  // planner can reference the same landmark on two different days, and
+  // until this, both got built as real, separately displayed itinerary
+  // items. The heuristic planner cannot do this for activities — it
+  // removes one from its own pending list as it places it — but has no
+  // equivalent restriction for restaurants, because none is wanted.
+  const placedActivities = new Set<string>();
   const dayIndex = new Map(options.dayDates.map((date, i) => [date, i + 1]));
 
   for (const day of plan.days) {
@@ -246,6 +267,14 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
     let sortOrder = 0;
 
     for (const planned of ordered) {
+      if (planned.candidateId) {
+        const isActivity = options.candidates.activities.has(planned.candidateId);
+        if (isActivity && placedActivities.has(planned.candidateId)) {
+          duplicateCandidateIds.push(planned.candidateId);
+          continue;
+        }
+      }
+
       const resolved = resolve(
         planned,
         options.candidates,
@@ -255,6 +284,11 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
       if (resolved === "unknown") {
         unknownCandidateIds.push(planned.candidateId!);
         continue;
+      }
+
+      if (planned.candidateId) {
+        const isActivity = options.candidates.activities.has(planned.candidateId);
+        if (isActivity) placedActivities.add(planned.candidateId);
       }
 
       const here =
@@ -359,6 +393,7 @@ export function buildPlan(plan: Plan, options: BuildOptions): BuiltPlan {
     items,
     unknownCandidateIds,
     shiftedItems,
+    duplicateCandidateIds,
     totalEstimatedCents,
   };
 }

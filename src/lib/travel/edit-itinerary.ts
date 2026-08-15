@@ -225,6 +225,9 @@ export function addItem(
     locationName: input.locationName ?? null,
     latitude: input.latitude ?? null,
     longitude: input.longitude ?? null,
+    // A traveler-typed item has no provider place id to build a real link
+    // from — null here, same as any location Google/Duffel never touched.
+    placeLink: null,
     estimatedCostCents: input.estimatedCostCents ?? 0,
     reservationRequired: input.reservationRequired ?? false,
     reservationStatus: input.reservationRequired ? "NEEDED" : "NOT_REQUIRED",

@@ -530,7 +530,13 @@ export async function getItinerary(
         orderBy: [{ startTime: "asc" }, { sortOrder: "asc" }],
         include: {
           location: {
-            select: { name: true, latitude: true, longitude: true },
+            select: {
+              name: true,
+              latitude: true,
+              longitude: true,
+              providerRef: true,
+              providerName: true,
+            },
           },
           inboundLegs: {
             orderBy: { legOrder: "asc" },
@@ -770,7 +776,15 @@ async function editDay(
       itineraryItems: {
         orderBy: [{ startTime: "asc" }, { sortOrder: "asc" }],
         include: {
-          location: { select: { name: true, latitude: true, longitude: true } },
+          location: {
+            select: {
+              name: true,
+              latitude: true,
+              longitude: true,
+              providerRef: true,
+              providerName: true,
+            },
+          },
           inboundLegs: {
             orderBy: { legOrder: "asc" },
             include: {

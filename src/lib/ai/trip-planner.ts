@@ -1,13 +1,15 @@
 import "server-only";
-import { isAiConfigured } from "@/lib/env";
+import { isAiConfigured, providerMode } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { complete } from "@/lib/ai/client";
 import { SYSTEM_PROMPT, buildUserPrompt } from "@/lib/ai/prompt";
 import { parsePlan, type Plan } from "@/lib/ai/schema";
 import { collectCandidates } from "@/lib/travel/candidates";
 import { planHeuristically } from "@/lib/travel/heuristic-planner";
-import { buildPlan, type BuiltPlan } from "@/lib/travel/plan-builder";
+import { buildPlan, type BuiltPlan, type BuiltItem, type BuiltLeg } from "@/lib/travel/plan-builder";
 import { buildTripDays } from "@/lib/travel/trip-setup";
+import { getTransitProvider } from "@/lib/providers/transit";
+import type { TransitRoute } from "@/lib/providers/types";
 import type {
   FoodPreference,
   Pace,
@@ -49,6 +51,108 @@ export interface GenerateResult {
   /** True when no provider had data for this destination. */
   destinationUncovered: boolean;
   warnings: string[];
+}
+
+/**
+ * Replaces estimated leg data with real transit data, once, after the
+ * schedule is already decided.
+ *
+ * `planRoute()` — what `buildPlan` and the optimizer use — stays pure and
+ * synchronous on purpose: the optimizer calls it thousands of times while
+ * rearranging a day, and a live network call at that rate would be slow and
+ * would burn through a free-tier quota fast. So the schedule itself (which
+ * items land when) is always decided from the fast estimate.
+ *
+ * This runs after that decision is final. For each unique origin/destination
+ * pair actually in the built itinerary, it calls the live provider once,
+ * caches the result for this generation, and re-times the returned legs
+ * backward from the item's already-decided start time — the same backward
+ * cursor `legsInto()` uses — so the last leg still lands exactly when the
+ * item starts. The schedule does not move; only what each leg says about
+ * itself does.
+ *
+ * A single leg's live lookup failing does not fail the whole itinerary — the
+ * estimate already on that item stands, which is a real number, just not
+ * necessarily today's number.
+ *
+ * Known gap: this enriches the itinerary generation path only. An item
+ * moved later by a drag-and-drop edit or a chat command recomputes its
+ * journey through `planRoute()` directly (see `recomputeDayLegs` in
+ * `repositories/trips.ts`), so an edited leg reverts to the estimate until
+ * that path is enriched too.
+ */
+async function enrichLegsWithLiveTransit(
+  items: BuiltItem[],
+  input: { destination: string; travelers: number; transportPreferences: TransportPreference[] },
+): Promise<void> {
+  if (providerMode("transit") !== "google") return;
+
+  const provider = getTransitProvider();
+  const cache = new Map<string, TransitRoute>();
+
+  const byDay = new Map<string, BuiltItem[]>();
+  for (const item of items) {
+    const list = byDay.get(item.date) ?? [];
+    list.push(item);
+    byDay.set(item.date, list);
+  }
+
+  for (const dayItems of byDay.values()) {
+    const ordered = [...dayItems].sort((a, b) => a.sortOrder - b.sortOrder);
+
+    for (let i = 1; i < ordered.length; i += 1) {
+      const from = ordered[i - 1]!;
+      const to = ordered[i]!;
+      if (to.legs.length === 0) continue;
+
+      const originLat = from.place?.latitude;
+      const originLng = from.place?.longitude;
+      const destLat = to.place?.latitude;
+      const destLng = to.place?.longitude;
+      if (
+        originLat == null ||
+        originLng == null ||
+        destLat == null ||
+        destLng == null
+      ) {
+        continue;
+      }
+
+      const key = `${originLat},${originLng}->${destLat},${destLng}`;
+      let route = cache.get(key);
+
+      if (!route) {
+        try {
+          route = await provider.route({
+            destination: input.destination,
+            origin: { latitude: originLat, longitude: originLng },
+            destinationPoint: { latitude: destLat, longitude: destLng },
+            originLabel: from.title,
+            destinationLabel: to.title,
+            preferences: input.transportPreferences,
+            travelers: input.travelers,
+          });
+          cache.set(key, route);
+        } catch (error) {
+          logger.warn("Live transit lookup failed, keeping the estimate", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+      }
+
+      let cursor = to.startTime.getTime();
+      const reTimed: BuiltLeg[] = [];
+      for (let j = route.legs.length - 1; j >= 0; j -= 1) {
+        const leg = route.legs[j]!;
+        const arrivalTime = new Date(cursor);
+        cursor -= leg.durationMinutes * 60_000;
+        const departureTime = new Date(cursor);
+        reTimed.unshift({ ...leg, legOrder: j, departureTime, arrivalTime });
+      }
+      to.legs = reTimed;
+    }
+  }
 }
 
 export async function generateItinerary(
@@ -140,6 +244,21 @@ export async function generateItinerary(
     pace: input.pace,
   });
 
+  try {
+    await enrichLegsWithLiveTransit(built.items, {
+      destination: input.destination,
+      travelers: input.travelers,
+      transportPreferences: input.transportPreferences,
+    });
+  } catch (error) {
+    // The whole point of enriching after the schedule is decided is that a
+    // problem here costs accuracy, not the trip. Log it and move on with
+    // whatever estimates buildPlan already produced.
+    logger.warn("Live transit enrichment failed, itinerary uses estimates", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   if (built.unknownCandidateIds.length > 0) {
     logger.warn("Planner referenced unknown candidates", {
       count: built.unknownCandidateIds.length,
@@ -156,6 +275,17 @@ export async function generateItinerary(
       `${built.shiftedItems.length} item${
         built.shiftedItems.length === 1 ? " was" : "s were"
       } moved later so there was time to travel between stops.`,
+    );
+  }
+
+  if (built.duplicateCandidateIds.length > 0) {
+    logger.warn("Planner scheduled the same candidate more than once", {
+      count: built.duplicateCandidateIds.length,
+    });
+    warnings.push(
+      `${built.duplicateCandidateIds.length} item${
+        built.duplicateCandidateIds.length === 1 ? " was" : "s were"
+      } suggested more than once and only scheduled the first time.`,
     );
   }
 

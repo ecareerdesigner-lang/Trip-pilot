@@ -16,11 +16,12 @@ import {
   TRANSPORT_MODE_COLOR,
   TRANSPORT_MODE_LABEL,
 } from "@/lib/constants";
-import { formatDayDate, formatDistance, formatDuration, formatTime } from "@/lib/format";
+import { formatDayDate, formatDistance, formatDuration, formatTemperatureRange, formatTime } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { ItemControls } from "@/components/trips/item-controls";
 import type { ItineraryDay, TimelineItem, TimelineLeg } from "@/types/view";
+import type { WeatherDay } from "@/lib/providers/types";
 
 /**
  * The itinerary timeline.
@@ -102,7 +103,18 @@ function ItemRow({
             <h4 className="mt-1 text-sm font-medium text-ink">{item.title}</h4>
 
             {item.locationName ? (
-              <p className="mt-0.5 text-xs text-muted">{item.locationName}</p>
+              item.placeLink ? (
+                <a
+                  href={item.placeLink}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="mt-0.5 inline-block text-xs text-route underline decoration-route/40 underline-offset-2 hover:decoration-route"
+                >
+                  {item.locationName}
+                </a>
+              ) : (
+                <p className="mt-0.5 text-xs text-muted">{item.locationName}</p>
+              )
             ) : null}
 
             {item.description ? (
@@ -115,6 +127,19 @@ function ItemRow({
               <p className="mt-1.5 flex items-center gap-1 text-xs text-signal">
                 <TicketCheck className="size-3.5" aria-hidden />
                 {RESERVATION_STATUS_LABEL[item.reservationStatus]}
+                {item.placeLink ? (
+                  <>
+                    {" · "}
+                    <a
+                      href={item.placeLink}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="underline decoration-signal/40 underline-offset-2 hover:decoration-signal"
+                    >
+                      Book on Google Maps
+                    </a>
+                  </>
+                ) : null}
               </p>
             ) : null}
           </div>
@@ -188,7 +213,7 @@ export function ItineraryTimeline({
   tripId,
   editable = false,
 }: {
-  days: ItineraryDay[];
+  days: (ItineraryDay & { weather?: WeatherDay | null })[];
   currency: string;
   tripId?: string;
   /** Sample data has no rows to edit, so controls stay off unless asked for. */
@@ -231,6 +256,15 @@ export function ItineraryTimeline({
             <span className="tabular mt-0.5 block text-sm text-ink">
               {formatDayDate(entry.date)}
             </span>
+            {entry.weather ? (
+              <span className="tabular mt-0.5 block text-xs text-muted">
+                {formatTemperatureRange(
+                  entry.weather.highCelsius,
+                  entry.weather.lowCelsius,
+                )}
+                {entry.weather.isMock ? " (sample)" : ""}
+              </span>
+            ) : null}
             <span className="mt-0.5 block text-xs text-muted">
               {entry.items.length === 0
                 ? "Nothing yet"
@@ -241,6 +275,17 @@ export function ItineraryTimeline({
       </div>
 
       <div className="rounded-card border border-line bg-card">
+        {day.weather ? (
+          <p className="tabular border-b border-line-soft px-5 py-3 text-sm text-ink-soft">
+            {day.weather.summary} ·{" "}
+            {formatTemperatureRange(day.weather.highCelsius, day.weather.lowCelsius)}
+            {day.weather.precipitationChance > 20
+              ? ` · ${day.weather.precipitationChance}% chance of rain`
+              : ""}
+            {day.weather.isMock ? " — sample data" : ""}
+          </p>
+        ) : null}
+
         {day.summary ? (
           <p className="border-b border-line-soft px-5 py-3 text-sm text-ink-soft">
             {day.summary}

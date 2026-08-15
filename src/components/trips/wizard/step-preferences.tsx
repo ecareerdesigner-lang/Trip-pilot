@@ -1,7 +1,8 @@
 "use client";
 
 import type { UseFormReturn } from "react-hook-form";
-import { FieldGroup } from "@/components/ui/field";
+import { Field, FieldGroup } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   CheckboxCards,
   RadioCards,
@@ -48,7 +49,7 @@ export function StepPreferences({
 }: {
   form: UseFormReturn<TripFormValues>;
 }) {
-  const { watch, setValue, formState } = form;
+  const { watch, setValue, formState, register } = form;
   const pace = watch("pace");
   const transportPreferences = watch("transportPreferences");
 
@@ -96,6 +97,38 @@ export function StepPreferences({
             setValue("transportPreferences", values, { shouldDirty: true })
           }
         />
+      </FieldGroup>
+
+      <FieldGroup
+        label="Day hours"
+        hint="How early to start, and how late to run. Check-out and the nightly return to the hotel are allowed a few minutes past this."
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <Field
+            id="dayStartTime"
+            label="Start"
+            error={formState.errors.dayStartTime?.message}
+          >
+            <Input
+              id="dayStartTime"
+              type="time"
+              invalid={Boolean(formState.errors.dayStartTime)}
+              {...register("dayStartTime")}
+            />
+          </Field>
+          <Field
+            id="dayEndTime"
+            label="End"
+            error={formState.errors.dayEndTime?.message}
+          >
+            <Input
+              id="dayEndTime"
+              type="time"
+              invalid={Boolean(formState.errors.dayEndTime)}
+              {...register("dayEndTime")}
+            />
+          </Field>
+        </div>
       </FieldGroup>
     </div>
   );

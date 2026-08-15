@@ -396,3 +396,16 @@ Do not rediscover these.
 - **The generated Prisma client is required for model types.** Before
   `npm run db:generate`, `PrismaClient` resolves but `prisma.trip` does not
   exist. `getPrisma()` returns `null` rather than throwing.
+- **A page under `(app)` will build fine in a sandbox with no database and
+  fail on a real one.** Next.js tries to statically prerender every page by
+  default. With no working database, `getCurrentUser()` short-circuits early
+  and the build looks clean — but on a real machine it actually reads the
+  session cookie, and prerendering a page with no request context throws
+  `Sign in to continue.` straight out of `requireUser()`. The fix is
+  `export const dynamic = "force-dynamic"` on `(app)/layout.tsx`, which
+  propagates to every nested route rather than needing it on each page. The
+  same reasoning makes `/`, `/sign-in` and `/sign-up` correctly dynamic too —
+  each one checks the live session to decide where to redirect, so none of
+  them can legitimately be static either. Do not trust a sandbox build's
+  static/dynamic route table; only a build against a real, reachable
+  database proves it.

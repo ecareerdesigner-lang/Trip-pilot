@@ -85,6 +85,19 @@ export function formatTime(
   }).format(new Date(date));
 }
 
+/** 22 -> 72 (Celsius to Fahrenheit, rounded). */
+export function celsiusToFahrenheit(celsius: number): number {
+  return Math.round((celsius * 9) / 5 + 32);
+}
+
+/** (24, 15) -> "75° / 59°" */
+export function formatTemperatureRange(
+  highCelsius: number,
+  lowCelsius: number,
+): string {
+  return `${celsiusToFahrenheit(highCelsius)}° / ${celsiusToFahrenheit(lowCelsius)}°`;
+}
+
 /** 95 -> "1h 35m", 45 -> "45 min", 120 -> "2h" */
 export function formatDuration(minutes: number): string {
   const safe = Math.max(0, Math.round(minutes));

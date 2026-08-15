@@ -37,6 +37,7 @@ function item(id: string, legs: TimelineLeg[]): TimelineItem {
     locationName: null,
     latitude: null,
     longitude: null,
+    placeLink: null,
     estimatedCostCents: 0,
     reservationRequired: false,
     reservationStatus: "NOT_REQUIRED",

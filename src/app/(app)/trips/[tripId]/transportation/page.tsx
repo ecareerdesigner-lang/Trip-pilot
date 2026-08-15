@@ -172,6 +172,14 @@ export default async function TransportationPage({
                           ))}
                         </div>
 
+                        {journey.legs
+                          .filter((leg) => leg.mode !== "WALK" && leg.instructions)
+                          .map((leg) => (
+                            <p key={leg.id} className="mt-1 text-xs text-ink-soft">
+                              {leg.instructions}
+                            </p>
+                          ))}
+
                         <p className="tabular mt-1.5 text-xs text-muted">
                           {formatDuration(journey.totalMinutes)} door to door
                           {journey.totalMeters > 0

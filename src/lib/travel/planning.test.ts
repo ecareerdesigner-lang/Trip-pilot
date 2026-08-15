@@ -124,6 +124,10 @@ describe("heuristic planner", () => {
     const plan = heuristic({ dayStartMinute: 9 * 60, dayEndMinute: 21 * 60 });
     for (const day of plan.days) {
       for (const item of day.items) {
+        // Check-out and the nightly return to the hotel are allowed to run
+        // a few minutes past the stated end — see the matching exception in
+        // planner-invariants.test.ts for the reasoning.
+        if (item.type === "LODGING") continue;
         expect(item.startMinute + item.durationMinutes).toBeLessThanOrEqual(
           21 * 60,
         );
@@ -156,6 +160,22 @@ describe("heuristic planner", () => {
     expect(plan.days[0]!.items[0]!.type).toBe("LODGING");
     const lastItems = plan.days[3]!.items;
     expect(lastItems[lastItems.length - 1]!.type).toBe("LODGING");
+  });
+
+  it("returns to the hotel at the end of every day except the last", () => {
+    const plan = heuristic();
+    for (const [index, day] of plan.days.entries()) {
+      const isLast = index === plan.days.length - 1;
+      const lastItem = day.items[day.items.length - 1]!;
+      if (isLast) {
+        // The last day ends with check-out, not a return — already covered
+        // above, and title-checked here to make the distinction explicit.
+        expect(lastItem.title).toMatch(/^Check out of/);
+      } else {
+        expect(lastItem.type).toBe("LODGING");
+        expect(lastItem.title).toMatch(/^Return to/);
+      }
+    }
   });
 
   it("still produces a plan when no candidates exist", async () => {
@@ -471,6 +491,20 @@ describe("a planner's times are requests, not facts", () => {
         item.startTime.getUTCHours() * 60 + item.startTime.getUTCMinutes();
       expect(actual).toBeGreaterThanOrEqual(requested);
     }
+  });
+
+  it("never schedules the same activity twice", () => {
+    // The heuristic planner cannot do this for activities — it removes one
+    // from its own pending list as it places it. The AI planner has no such
+    // list: it can reference "a1" once here and again later, and both
+    // references were built into real, separately billed and displayed
+    // itinerary items. Collapsed onto one day for the test, but the
+    // underlying bug spans any two days in the trip. Restaurants and
+    // lodging are deliberately exempt from this — see plan-builder.ts.
+    const plan = aiShapedPlan(["a1", "a2", "a1"]);
+    const result = build(plan);
+
+    expect(result.items).toHaveLength(2);
   });
 
   it("leaves a possible schedule exactly as the planner wrote it", () => {

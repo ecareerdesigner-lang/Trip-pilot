@@ -104,5 +104,7 @@ export function buildPreferenceRow(payload: TripPayload) {
     transportPreferences: payload.transportPreferences,
     interests: [] as string[],
     dietaryRestrictions: [] as string[],
+    dayStartMinute: payload.dayStartMinute,
+    dayEndMinute: payload.dayEndMinute,
   };
 }

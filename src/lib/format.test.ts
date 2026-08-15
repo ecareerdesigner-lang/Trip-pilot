@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  celsiusToFahrenheit,
   daysBetweenInclusive,
   formatDateRange,
   formatDistance,
   formatDuration,
+  formatTemperatureRange,
   nightsBetween,
 } from "@/lib/format";
 
@@ -42,5 +44,17 @@ describe("format", () => {
     expect(formatDistance(3218)).toBe("2.0 mi");
     expect(formatDistance(800, "km")).toBe("800 m");
     expect(formatDistance(3200, "km")).toBe("3.2 km");
+  });
+
+  it("converts Celsius to Fahrenheit", () => {
+    expect(celsiusToFahrenheit(0)).toBe(32);
+    expect(celsiusToFahrenheit(100)).toBe(212);
+    expect(celsiusToFahrenheit(22)).toBe(72);
+    expect(celsiusToFahrenheit(-5)).toBe(23);
+  });
+
+  it("formats a temperature range as high then low, in Fahrenheit", () => {
+    expect(formatTemperatureRange(24, 15)).toBe("75° / 59°");
+    expect(formatTemperatureRange(0, -10)).toBe("32° / 14°");
   });
 });

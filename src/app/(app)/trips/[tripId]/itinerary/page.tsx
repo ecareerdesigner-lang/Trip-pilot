@@ -18,6 +18,8 @@ import { ValidationPanel } from "@/components/trips/validation-panel";
 import { TripChat } from "@/components/trips/trip-chat";
 import { isAiConfigured } from "@/lib/env";
 import { formatDateRange } from "@/lib/format";
+import { getWeatherProvider } from "@/lib/providers/weather";
+import type { WeatherDay } from "@/lib/providers/types";
 
 export const metadata: Metadata = { title: "Itinerary" };
 
@@ -36,6 +38,28 @@ export default async function ItineraryPage({
   ]);
 
   if (!trip) notFound();
+
+  // Live, not saved with the rest of the itinerary — a price or a schedule
+  // locked in at generation time is still correct weeks later; a forecast
+  // is not. Failing quietly here means a slow or unavailable weather
+  // provider costs a missing chip, not the itinerary page itself.
+  let weatherByDate = new Map<string, WeatherDay>();
+  try {
+    const forecast = await getWeatherProvider().forecast({
+      destination: trip.destination,
+      dates: { start: trip.startDate, end: trip.endDate },
+    });
+    weatherByDate = new Map(forecast.map((day) => [day.date, day]));
+  } catch {
+    // No forecast today; the timeline renders exactly as it did before this.
+  }
+
+  const daysWithWeather = itinerary
+    ? itinerary.days.map((day) => ({
+        ...day,
+        weather: weatherByDate.get(day.date) ?? null,
+      }))
+    : [];
 
   return (
     <>
@@ -68,7 +92,7 @@ export default async function ItineraryPage({
             ) : null}
 
             <ItineraryTimeline
-              days={itinerary.days}
+              days={daysWithWeather}
               currency={itinerary.currency}
               tripId={tripId}
               // `isMock` describes where the prices came from, not whether the

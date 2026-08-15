@@ -221,7 +221,13 @@ describe("toItineraryDay", () => {
       completed: false,
       isMock: true,
       sortOrder: 0,
-      location: { name: "A bistro", latitude: 40.75, longitude: -73.99 },
+      location: {
+        name: "A bistro",
+        latitude: 40.75,
+        longitude: -73.99,
+        providerRef: null,
+        providerName: null,
+      },
       inboundLegs: [],
       ...overrides,
     };

@@ -38,7 +38,8 @@ export type ValidationCode =
   | "LONG_DAY"
   | "EMPTY_DAY"
   | "BUDGET_OVERRUN"
-  | "UNSCHEDULED_MUST_DO";
+  | "UNSCHEDULED_MUST_DO"
+  | "DESCRIPTION_TIME_MISMATCH";
 
 export interface ValidationWarning {
   severity: ValidationSeverity;
@@ -285,6 +286,31 @@ function checkItem(
     });
   }
 
+  // An AI-written description is generated alongside the schedule, not
+  // derived from it — the model can describe "the 8PM concert" and
+  // separately schedule the item at 11:59 PM in the same response, an
+  // internal inconsistency no schema check catches, because both values are
+  // individually valid. This catches the one place that contradiction is
+  // visible: the item's own words versus its own start time.
+  const mentionedMinute = extractMentionedTime(
+    `${item.title} ${item.description ?? ""}`,
+  );
+  if (
+    mentionedMinute !== null &&
+    Math.abs(mentionedMinute - startMinute) > TIME_MENTION_TOLERANCE_MINUTES
+  ) {
+    warnings.push({
+      severity: "WARNING",
+      code: "DESCRIPTION_TIME_MISMATCH",
+      message: `${item.title} is scheduled for ${clock(
+        item.startTime,
+      )}, but its own description mentions ${minuteToClock(mentionedMinute)}.`,
+      suggestion: `Move it to ${minuteToClock(mentionedMinute)}, or edit the description if that time is wrong.`,
+      itemIds: [item.id],
+      dayNumber: day.dayNumber,
+    });
+  }
+
   const dayStart = options.dayStartMinute;
   const dayEnd = options.dayEndMinute;
   if (dayStart !== undefined && startMinute < dayStart) {
@@ -465,4 +491,29 @@ function minuteToClock(minute: number): string {
   const suffix = hour24 < 12 ? "AM" : "PM";
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   return `${hour12}:${minutes} ${suffix}`;
+}
+
+const TIME_MENTION_TOLERANCE_MINUTES = 90;
+
+/**
+ * Loosely extracts a single clock time mentioned in free text, like "8PM" or
+ * "6:30 pm". Returns null when nothing matches — most items mention no time
+ * at all, and that is not itself suspicious.
+ *
+ * Requiring the am/pm suffix is deliberate: without it, "built in 1900"
+ * would read as "19:00". A plain 24-hour time with no am/pm marker is
+ * genuinely ambiguous in prose and not worth guessing at.
+ */
+function extractMentionedTime(text: string): number | null {
+  const match = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.exec(text);
+  if (!match) return null;
+
+  let hour = Number.parseInt(match[1]!, 10);
+  const minute = match[2] ? Number.parseInt(match[2], 10) : 0;
+  const isPm = match[3]!.toLowerCase() === "pm";
+
+  if (hour === 12) hour = isPm ? 12 : 0;
+  else if (isPm) hour += 12;
+
+  return hour * 60 + minute;
 }

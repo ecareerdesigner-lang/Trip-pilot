@@ -188,7 +188,13 @@ export interface ItemRow {
   completed: boolean;
   isMock: boolean;
   sortOrder: number;
-  location: { name: string; latitude: number | null; longitude: number | null } | null;
+  location: {
+    name: string;
+    latitude: number | null;
+    longitude: number | null;
+    providerRef: string | null;
+    providerName: string | null;
+  } | null;
   inboundLegs: LegRow[];
 }
 
@@ -224,6 +230,24 @@ function toTimelineLeg(row: LegRow): TimelineLeg {
   };
 }
 
+/**
+ * A real link to a place, built from the provider's own id rather than a
+ * stored URL — a scraped or manually-entered website link goes stale the
+ * moment a business changes domains; a Google place id does not.
+ * Currently only Google is a real, mapped source; anything else (Duffel
+ * accommodation ids, a user-entered location) has no equivalent public
+ * link, so this returns null rather than a broken guess.
+ */
+function toPlaceLink(location: {
+  providerRef: string | null;
+  providerName: string | null;
+} | null): string | null {
+  if (!location?.providerRef || location.providerName !== "google") {
+    return null;
+  }
+  return `https://www.google.com/maps/place/?q=place_id:${location.providerRef}`;
+}
+
 function toTimelineItem(row: ItemRow): TimelineItem {
   return {
     id: row.id,
@@ -236,6 +260,7 @@ function toTimelineItem(row: ItemRow): TimelineItem {
     locationName: row.location?.name ?? null,
     latitude: row.location?.latitude ?? null,
     longitude: row.location?.longitude ?? null,
+    placeLink: toPlaceLink(row.location),
     estimatedCostCents: row.estimatedCostCents,
     reservationRequired: row.reservationRequired,
     reservationStatus: row.reservationStatus,

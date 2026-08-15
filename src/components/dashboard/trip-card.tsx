@@ -3,6 +3,7 @@ import { Users, Wallet, ListChecks } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { TripStatusBadge } from "@/components/ui/badge";
 import { ProgressBar } from "@/components/ui/progress-bar";
+import { DeleteTripButton } from "@/components/trips/delete-trip-button";
 import { formatDateRange, nightsBetween, relativeToToday } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import type { TripSummary } from "@/types/view";
@@ -32,6 +33,7 @@ export function TripCard({ trip }: { trip: TripSummary }) {
             <h3 className="mt-1 truncate text-base leading-tight">{trip.name}</h3>
           </div>
           <TripStatusBadge status={trip.status} />
+          <DeleteTripButton tripId={trip.id} tripName={trip.name} />
         </div>
 
         <p className="tabular mt-3 text-sm text-ink-soft">

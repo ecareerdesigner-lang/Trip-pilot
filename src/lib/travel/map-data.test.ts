@@ -46,6 +46,7 @@ function item(
     locationName: `Place ${id}`,
     latitude: point?.latitude ?? null,
     longitude: point?.longitude ?? null,
+    placeLink: null,
     estimatedCostCents: 0,
     reservationRequired: false,
     reservationStatus: "NOT_REQUIRED",
