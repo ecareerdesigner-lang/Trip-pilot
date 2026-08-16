@@ -2,6 +2,7 @@ import { getActivityProvider } from "@/lib/providers/activities";
 import { getHotelProvider } from "@/lib/providers/hotels";
 import { getRestaurantProvider } from "@/lib/providers/restaurants";
 import { getWeatherProvider } from "@/lib/providers/weather";
+import { daysBetweenInclusive } from "@/lib/format";
 import type {
   ActivityCandidate,
   HotelCandidate,
@@ -46,6 +47,17 @@ export async function collectCandidates(
 ): Promise<CandidateSet> {
   const dates = { start: options.startDate, end: options.endDate };
 
+  // Fixed limits here starved a longer trip of real options. A 5-day trip
+  // needs something like 2-3 restaurants and 2-3 activities per day; a flat
+  // 14/12 cap for the whole trip meant the model ran out of unique places
+  // by day 3 and started repeating itself — repeats the duplicate-candidate
+  // guard in plan-builder.ts correctly drops, leaving the day with a gap
+  // where the repeat would have been. Scaled per day instead, with the old
+  // flat numbers as a floor so a short trip is not shortchanged either.
+  const days = daysBetweenInclusive(options.startDate, options.endDate);
+  const restaurantLimit = Math.max(14, days * 3);
+  const activityLimit = Math.max(12, days * 3);
+
   // Providers are independent; one being slow should not serialize the rest.
   const [hotels, restaurants, activities, weather] = await Promise.all([
     getHotelProvider().search({
@@ -59,13 +71,13 @@ export async function collectCandidates(
     getRestaurantProvider().search({
       destination: options.destination,
       travelers: options.travelers,
-      limit: 14,
+      limit: restaurantLimit,
       ...(options.near ? { near: options.near } : {}),
     }),
     getActivityProvider().search({
       destination: options.destination,
       travelers: options.travelers,
-      limit: 12,
+      limit: activityLimit,
     }),
     getWeatherProvider().forecast({ destination: options.destination, dates }),
   ]);

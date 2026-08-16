@@ -39,7 +39,8 @@ export type ValidationCode =
   | "EMPTY_DAY"
   | "BUDGET_OVERRUN"
   | "UNSCHEDULED_MUST_DO"
-  | "DESCRIPTION_TIME_MISMATCH";
+  | "DESCRIPTION_TIME_MISMATCH"
+  | "ONLY_MEALS";
 
 export interface ValidationWarning {
   severity: ValidationSeverity;
@@ -231,6 +232,24 @@ function checkDayShape(
       )} scheduled and no meal.`,
       suggestion: "Add a meal, or expect to eat on the move.",
       itemIds: [],
+      dayNumber: day.dayNumber,
+    });
+  }
+
+  // The opposite failure: every item is a meal and nothing else. Two
+  // restaurants with a five-hour gap between them is not a light day, it
+  // is a day the model filled with placeholders — a real symptom of the
+  // planner running out of things to schedule, not a traveler's choice to
+  // rest.
+  const onlyMeals =
+    items.length >= 2 && items.every((item) => item.type === "RESTAURANT");
+  if (onlyMeals) {
+    warnings.push({
+      severity: "WARNING",
+      code: "ONLY_MEALS",
+      message: `Day ${day.dayNumber} has ${items.length} items, and every one of them is a meal.`,
+      suggestion: "Add sightseeing or an activity between the meals.",
+      itemIds: items.map((item) => item.id),
       dayNumber: day.dayNumber,
     });
   }

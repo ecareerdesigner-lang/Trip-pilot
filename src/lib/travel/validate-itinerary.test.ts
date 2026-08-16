@@ -292,6 +292,40 @@ describe("meals", () => {
     ]);
     expect(codes(report)).not.toContain("NO_MEAL");
   });
+
+  // The exact shape of a real bug: a five-day trip where one day's entire
+  // schedule was lunch, a five-hour gap, then dinner — nothing else. Two
+  // meals is a correctly-formed day by every other check (it has a meal,
+  // it is not too long), which is exactly why this needed its own check.
+  it("warns about a day that is only meals", () => {
+    const report = validateItinerary([
+      day([
+        item({ id: "lunch", type: "RESTAURANT", title: "CiPasso", startTime: at(12, 30), endTime: at(14), durationMinutes: 90 }),
+        item({ id: "dinner", type: "RESTAURANT", title: "Tonnarello", startTime: at(21), endTime: at(22, 30), durationMinutes: 90 }),
+      ]),
+    ]);
+    expect(codes(report)).toContain("ONLY_MEALS");
+  });
+
+  it("stays quiet when a day has one meal among other things", () => {
+    const report = validateItinerary([
+      day([
+        item({ id: "a", type: "RESTAURANT", startTime: at(12), endTime: at(13), durationMinutes: 60 }),
+        item({ id: "b", startTime: at(14), endTime: at(16), durationMinutes: 120 }),
+      ]),
+    ]);
+    expect(codes(report)).not.toContain("ONLY_MEALS");
+  });
+
+  it("does not flag a single meal alone as only-meals", () => {
+    // items.length >= 2 is deliberate: one restaurant on an otherwise
+    // empty day is a different, already-covered problem (EMPTY_DAY), not
+    // this one.
+    const report = validateItinerary([
+      day([item({ id: "a", type: "RESTAURANT", startTime: at(19), endTime: at(20, 30), durationMinutes: 90 })]),
+    ]);
+    expect(codes(report)).not.toContain("ONLY_MEALS");
+  });
 });
 
 describe("description time mismatch", () => {

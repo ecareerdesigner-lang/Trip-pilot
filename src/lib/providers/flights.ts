@@ -397,7 +397,19 @@ export class DuffelFlightProvider implements FlightProvider {
       resolveAirportCode(query.origin, key),
       resolveAirportCode(query.destination, key),
     ]);
-    if (!originCode || !destinationCode) return [];
+    if (!originCode || !destinationCode) {
+      // Silent before this — "no flights found" and "we never actually
+      // asked Duffel anything because we couldn't resolve an airport" look
+      // identical to the traveler. They are not the same problem, and only
+      // one of them is fixable by picking different dates.
+      logger.warn("Could not resolve an airport code, skipping flight search", {
+        origin: query.origin,
+        originResolved: originCode,
+        destination: query.destination,
+        destinationResolved: destinationCode,
+      });
+      return [];
+    }
 
     const slices = [
       { origin: originCode, destination: destinationCode, departure_date: query.departDate },
@@ -424,6 +436,15 @@ export class DuffelFlightProvider implements FlightProvider {
 
     const offers = response.data?.offers ?? [];
     const limit = query.limit ?? 4;
+
+    if (offers.length === 0) {
+      logger.warn("Duffel returned zero flight offers for a resolved route", {
+        originCode,
+        destinationCode,
+        departDate: query.departDate,
+        returnDate: query.returnDate,
+      });
+    }
 
     return offers
       .slice(0, limit)
