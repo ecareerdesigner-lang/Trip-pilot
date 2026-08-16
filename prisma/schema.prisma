@@ -487,11 +487,18 @@ model Budget {
 // RESERVATIONS & DOCUMENTS
 // ---------------------------------------------------------------------------
 
+enum ReservationCategory {
+  FLIGHT
+  HOTEL
+  OTHER
+}
+
 model Reservation {
   id              String  @id @default(uuid()) @db.Uuid
   tripId          String  @db.Uuid
   itineraryItemId String? @unique @db.Uuid
 
+  category          ReservationCategory @default(OTHER)
   title             String
   status            ReservationStatus @default(NEEDED)
   confirmationCode  String?
@@ -503,6 +510,23 @@ model Reservation {
   costCents         Int?
   cancellationPolicy String?          @db.Text
   notes             String?           @db.Text
+
+  // FLIGHT only. Kept as plain nullable columns on the same table rather
+  // than a separate model — a flight is a reservation with two extra times
+  // and two airport codes, not a fundamentally different kind of record,
+  // and splitting it out would mean two queries and two forms for what the
+  // traveler experiences as one list.
+  flightNumber     String?
+  departureAirport String?
+  departureTime    DateTime?
+  arrivalAirport   String?
+  arrivalTime      DateTime?
+
+  // HOTEL only. Deliberately a plain typed-in address, not a `Location`
+  // row — a `Location` is a resolved, provider-backed place used for
+  // routing and mapping; this is the traveler's own confirmation-email
+  // address, entered by hand precisely because Hotels is still mock data.
+  locationAddress String?
 
   trip          Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
   itineraryItem ItineraryItem? @relation(fields: [itineraryItemId], references: [id], onDelete: SetNull)

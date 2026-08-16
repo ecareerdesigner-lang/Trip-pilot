@@ -364,9 +364,17 @@ export class GoogleTransitProvider implements TransitProvider {
 
     const steps = route.legs?.flatMap((leg) => leg.steps ?? []) ?? [];
 
+    // Only a genuine DRIVE request's non-transit steps are actually
+    // driving. A TRANSIT request's non-transit steps are the walk to and
+    // from the stop — defaulting anything that wasn't literally "WALK" to
+    // "CAR" mislabeled those connector walks as short drives, which is
+    // exactly what "Drive 14 min ... Bus 6 min ... Drive 4 min" was: two
+    // walks to a bus stop, both shown as driving.
+    const nonTransitMode: TransportMode = travelMode === "DRIVE" ? "CAR" : "WALK";
+
     const legs: TransitLeg[] =
       steps.length > 0
-        ? consolidateSteps(steps, from, to, travelMode === "WALK" ? "WALK" : "CAR")
+        ? consolidateSteps(steps, from, to, nonTransitMode)
         : [
             // WALK and DRIVE requests do not always break into steps the
             // way TRANSIT does — a single-leg fallback using the route
@@ -374,7 +382,7 @@ export class GoogleTransitProvider implements TransitProvider {
             {
               providerName: "google",
               isMock: false,
-              mode: travelMode === "WALK" ? "WALK" : "CAR",
+              mode: nonTransitMode,
               legOrder: 0,
               originLabel: from,
               destinationLabel: to,

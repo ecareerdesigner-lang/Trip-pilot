@@ -157,9 +157,99 @@ function apiKey(): string {
   return key;
 }
 
+async function duffelGet<T>(
+  path: string,
+  key: string,
+  timeoutMs = 10_000,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${DUFFEL_BASE}${path}`, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${key}`,
+        Accept: "application/json",
+        "Duffel-Version": DUFFEL_VERSION,
+      },
+    });
+
+    const json = (await response.json().catch(() => null)) as
+      | (T & { errors?: { message?: string }[] })
+      | null;
+
+    if (!response.ok) {
+      const detail = json?.errors?.map((e) => e.message).join("; ") ?? "";
+      logger.error("Duffel request failed", { path, status: response.status, detail });
+      throw providerUnavailable("Duffel");
+    }
+
+    if (!json) throw providerUnavailable("Duffel");
+    return json;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (error instanceof Error && error.name === "AbortError") {
+      throw providerUnavailable("Duffel");
+    }
+    logger.error("Duffel request threw", {
+      path,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw providerUnavailable("Duffel");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface DuffelPlace {
+  type: "airport" | "city";
+  name: string;
+  iata_code?: string;
+}
+
+interface DuffelPlacesResponse {
+  data?: DuffelPlace[];
+}
+
+/**
+ * Resolves a plain destination name to a real IATA code — an airport or a
+ * city code, both of which Duffel's flight search accepts directly. This
+ * replaces looking the destination up in the same small hardcoded city list
+ * the mock provider uses: that list has 8 entries, and Rome was not one of
+ * them, which is why "no flights found" was actually "never asked Duffel
+ * anything" — the airport code lookup failed silently before the search
+ * ever ran.
+ *
+ * https://duffel.com/docs/api/places/get-place-suggestions
+ */
+async function resolveAirportCode(
+  query: string,
+  key: string,
+): Promise<string | null> {
+  const response = await duffelGet<DuffelPlacesResponse>(
+    `/places/suggestions?query=${encodeURIComponent(query)}`,
+    key,
+  );
+  const first = response.data?.[0];
+  return first?.iata_code ?? null;
+}
+
+
+interface DuffelAirportRef {
+  iata_code?: string;
+  name?: string;
+  city_name?: string;
+  iata_country_code?: string;
+  latitude?: number;
+  longitude?: number;
+  time_zone?: string;
+}
+
 interface DuffelSegment {
-  origin?: { iata_code?: string };
-  destination?: { iata_code?: string };
+  origin?: DuffelAirportRef;
+  destination?: DuffelAirportRef;
   departing_at?: string;
   arriving_at?: string;
   marketing_carrier?: { name?: string };
@@ -247,29 +337,30 @@ function parseIsoDurationMinutes(duration: string | undefined): number {
   return hours * 60 + minutes;
 }
 
-function placeFor(iataCode: string | undefined, city: City | undefined): PlaceRef {
-  const airport = city?.airports.find((a) => a.code === iataCode);
+/**
+ * Duffel's own offer response already carries full airport detail
+ * (name, city, country, coordinates, timezone) on every segment's origin
+ * and destination — no separate lookup needed to build a real PlaceRef,
+ * unlike the mock provider's airports which only exist inside the 8-city
+ * list and need `airportPlace()` above to fill in the rest.
+ */
+function placeFor(airport: DuffelAirportRef | undefined): PlaceRef {
   return {
-    name: airport?.name ?? iataCode ?? "Unknown airport",
+    name: airport?.name ?? airport?.iata_code ?? "Unknown airport",
     kind: "AIRPORT",
-    city: city?.name ?? null,
-    region: city?.region ?? null,
-    country: city?.country ?? null,
-    latitude: airport?.point.latitude ?? null,
-    longitude: airport?.point.longitude ?? null,
-    timezone: city?.timezone ?? null,
-    providerRef: iataCode,
+    city: airport?.city_name ?? null,
+    region: null,
+    country: airport?.iata_country_code ?? null,
+    latitude: airport?.latitude ?? null,
+    longitude: airport?.longitude ?? null,
+    timezone: airport?.time_zone ?? null,
+    providerRef: airport?.iata_code,
+    providerName: "duffel",
   };
 }
 
-function offerToCandidates(
-  offer: DuffelOffer,
-  travelers: number,
-  fromCity: City,
-  toCity: City,
-): FlightCandidate[] {
-  const totalCents = toCents(offer.total_amount) * 1; // total_amount is already for the whole party
-  void travelers; // kept for signature symmetry with the mock provider
+function offerToCandidates(offer: DuffelOffer): FlightCandidate[] {
+  const totalCents = toCents(offer.total_amount);
 
   return (offer.slices ?? []).map((slice, sliceIndex): FlightCandidate => {
     const segments = slice.segments ?? [];
@@ -284,8 +375,8 @@ function offerToCandidates(
       identifier: first?.marketing_carrier_flight_number ?? "",
       originCode: first?.origin?.iata_code ?? "",
       destinationCode: last?.destination?.iata_code ?? "",
-      originPlace: placeFor(first?.origin?.iata_code, fromCity),
-      destinationPlace: placeFor(last?.destination?.iata_code, toCity),
+      originPlace: placeFor(first?.origin),
+      destinationPlace: placeFor(last?.destination),
       departureTime: first?.departing_at ?? "",
       arrivalTime: last?.arriving_at ?? "",
       durationMinutes: parseIsoDurationMinutes(slice.duration),
@@ -298,15 +389,15 @@ function offerToCandidates(
 
 export class DuffelFlightProvider implements FlightProvider {
   async search(query: FlightQuery): Promise<FlightCandidate[]> {
-    const fromCity = resolveCity(query.origin);
-    const toCity = resolveCity(query.destination);
-    if (!fromCity || !toCity) return [];
-
-    const originCode = fromCity.airports[0]?.code;
-    const destinationCode = toCity.airports[0]?.code;
-    if (!originCode || !destinationCode) return [];
-
     const key = apiKey();
+
+    // Real lookup, not the mock provider's 8-city list — resolves any
+    // airport or city name Duffel knows about, worldwide.
+    const [originCode, destinationCode] = await Promise.all([
+      resolveAirportCode(query.origin, key),
+      resolveAirportCode(query.destination, key),
+    ]);
+    if (!originCode || !destinationCode) return [];
 
     const slices = [
       { origin: originCode, destination: destinationCode, departure_date: query.departDate },
@@ -336,7 +427,7 @@ export class DuffelFlightProvider implements FlightProvider {
 
     return offers
       .slice(0, limit)
-      .flatMap((offer) => offerToCandidates(offer, query.travelers, fromCity, toCity))
+      .flatMap((offer) => offerToCandidates(offer))
       .sort((a, b) => a.priceCents - b.priceCents);
   }
 }

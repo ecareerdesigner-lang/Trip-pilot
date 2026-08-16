@@ -80,6 +80,9 @@ export const RESERVATION_STATUSES = [
 ] as const;
 export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
 
+export const RESERVATION_CATEGORIES = ["FLIGHT", "HOTEL", "OTHER"] as const;
+export type ReservationCategory = (typeof RESERVATION_CATEGORIES)[number];
+
 export const BUDGET_CATEGORIES = [
   "TRANSPORTATION",
   "LODGING",

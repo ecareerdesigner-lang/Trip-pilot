@@ -33,6 +33,7 @@ const PAIRS: ReadonlyArray<[string, readonly string[]]> = [
   ["TravelMethod", domain.TRAVEL_METHODS],
   ["TransportationIntent", domain.TRANSPORTATION_INTENTS],
   ["ReservationStatus", domain.RESERVATION_STATUSES],
+  ["ReservationCategory", domain.RESERVATION_CATEGORIES],
   ["BudgetCategory", domain.BUDGET_CATEGORIES],
   ["Pace", domain.PACES],
   ["FoodPreference", domain.FOOD_PREFERENCES],

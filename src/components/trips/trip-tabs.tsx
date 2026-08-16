@@ -15,7 +15,7 @@ const TABS = [
   { label: "Budget", path: "/budget" },
   { label: "Transportation", path: "/transportation" },
   { label: "Flights", path: "/flights" },
-  { label: "Reservations", path: null },
+  { label: "Reservations", path: "/reservations" },
   { label: "Documents", path: null },
 ] as const;
 
